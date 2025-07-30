@@ -1,19 +1,20 @@
 {
-  "name": "fitgirl",
-  "version": "0.0.1",
-  "description": "",
-  "main": "fitgirl.js",
-  "scripts": {
-    "start": "node --no-warnings --enable-source-maps fitgirl.js",
-    "find": "node --no-warnings --enable-source-maps find.js"
-  },
-  "keywords": [],
-  "author": "Vladimir Mandic <mandic00@live.com>",
-  "license": "MIT",
-  "dependencies": {
-    "@vladmandic/pilogger": "^0.4.6",
-    "jquery": "^3.6.1",
-    "jsdom": "^20.0.1",
-    "puppeteer": "^24.15.0"
-  }
+    "name": "fitgirl-scrapper",
+    "version": "1.0.0",
+    "description": "Scrapper for FitGirl Repacks. This script scrapes the FitGirl Repacks website to gather information and download links (magnet, FuckingFast and DataNodes).",
+    "main": "fitgirl.js",
+    "scripts": {
+        "start": "node --no-warnings --enable-source-maps fitgirl.js",
+        "direct": "node --no-warnings --enable-source-maps ddl.js",
+        "find": "node --no-warnings --enable-source-maps find.js"
+    },
+    "keywords": [],
+    "author": "Matsumurae",
+    "license": "MIT",
+    "dependencies": {
+        "@vladmandic/pilogger": "^0.5.1",
+        "puppeteer": "^24.15.0",
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    }
 }

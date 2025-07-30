@@ -1,25 +1,13 @@
-# fitgirl
+# Fitgirl scrapper
 
-scraper and parser for <https://fitgirl-repacks.site>  
-*why*? simply because its lacking decent search capabilities  
+This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but as of today, it doesn't work. That's why I took the project and…
 
-## usage
+1. Redo it to use puppeteer to imitate a real browser
+2. Add DDL links (FuckingFast and DataNodes) to the JSON
+3. Update the code to retrieve newest games
 
-> npm install
+## How to use it
 
-- install dependencies
-
-> npm start
-
-- parses site and get updated pages
-- get details for each games
-- resumable: abort at any time and restart to resume
-- only updates new and missing data
-- saves results to `fitgirl.json`
-- uses silly `jsdom` and `jquery` parsing so future breakages are possible
-
-> npm run find `<search-string>`
-
-- loads `fitgirl.json` prepared by main script
-- finds all games matching search string
-- if search string is omitted, prints sections with **newest** and **largest** games
+1. Install dependencies with `npm i`
+2. Run `npm run find <name-here>` to search for a specific game
+3. Run `npm start` to retrieve newest games

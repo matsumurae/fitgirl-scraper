@@ -1,27 +1,51 @@
 const fs = require("fs");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
+
+// Add stealth plugin to Puppeteer
+puppeteer.use(StealthPlugin());
 
 // Configurable
 const file = "fitgirl.json";
 const debug = true; // Enabled for better debugging
+const maxRetries = 3; // Number of retry attempts for failed requests
+const retryDelay = 30000; // Delay between retries in ms
 
 // Internal counter
 let id = 1;
 
-// Fetch HTML content of a URI using Puppeteer
-async function html(uri, browser) {
+// Fetch HTML content of a URI using Puppeteer with retries
+async function html(uri, browser, attempt = 1) {
     try {
         const page = await browser.newPage();
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
-        await page.goto(uri, { waitUntil: "networkidle2", timeout: 30000 });
+        await page.goto(uri, { waitUntil: "networkidle2", timeout: 60000 });
         const html = await page.content();
         await page.close();
         return html;
     } catch (err) {
-        log.warn("fetch error", { uri, error: err.message, stack: err.stack });
+        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
+            log.error("Connection refused by server", { uri, attempt });
+            if (attempt < maxRetries) {
+                log.info(
+                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
+                );
+                await new Promise((resolve) => setTimeout(resolve, retryDelay));
+                return html(uri, browser, attempt + 1);
+            }
+            log.error("All retries failed for", { uri });
+            return "";
+        }
+        log.warn("fetch error", { uri, attempt, error: err.message });
+        if (attempt < maxRetries) {
+            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+            return html(uri, browser, attempt + 1);
+        }
+        log.error("fetch failed after retries", { uri, error: err.message });
         return "";
     }
 }
@@ -36,7 +60,7 @@ async function details(game, browser) {
         );
         await page.goto(game.link, {
             waitUntil: "networkidle2",
-            timeout: 30000,
+            timeout: 60000,
         });
 
         // More flexible date selector
@@ -116,12 +140,52 @@ async function details(game, browser) {
         if (game?.size > 0 && game.original?.includes("MB")) game.size /= 1024;
         game.verified = game.size > 0;
 
+        // Extract direct download links
+        game.direct = await page.evaluate(() => {
+            const directLinks = {};
+            const ddl = Array.from(document.querySelectorAll("h3")).find((el) =>
+                el.textContent.includes("Download Mirrors (Direct Links)")
+            );
+            if (ddl) {
+                const ul =
+                    Array.from(ddl.parentElement.children).find(
+                        (el) => el.tagName === "UL" && el !== ddl
+                    ) || null;
+                if (ul) {
+                    const items = ul.querySelectorAll("li");
+                    for (const item of items) {
+                        const text = item.textContent.toLowerCase();
+                        let host = null;
+                        if (text.includes("datanodes")) {
+                            host = "datanodes";
+                        } else if (text.includes("fuckingfast")) {
+                            host = "fuckingfast";
+                        }
+                        if (host) {
+                            directLinks[host] = directLinks[host] || [];
+                            const spoilerContent = item.querySelector(
+                                ".su-spoiler-content"
+                            );
+                            if (spoilerContent) {
+                                const spoilerLinks = Array.from(
+                                    spoilerContent.querySelectorAll("a")
+                                ).map((a) => a.href);
+                                directLinks[host].push(...spoilerLinks);
+                            }
+                        }
+                    }
+                }
+            }
+            return directLinks;
+        });
+
         log.data("details", {
             id: game.id,
             verified: game.verified,
             game: game.name,
             link: game.link,
             size: game.size,
+            direct: game.direct,
         });
 
         if (!game.verified && debug) {
@@ -187,20 +251,27 @@ async function save(games) {
         log.data("save", {
             games: games.length,
             verified: games.filter((g) => g.verified).length,
+            withDirect: games.filter(
+                (g) => g.direct && Object.keys(g.direct).length > 0
+            ).length,
+            missingDirect: games.filter((g) => g.verified && !g.direct),
         });
     } catch (err) {
         log.error("save failed", { file, error: err.message });
     }
 }
 
-// Update list of games
-async function update(games, browser) {
-    const content = await html(
-        "https://fitgirl-repacks.site/all-my-repacks-a-z",
-        browser
-    );
+// Update list of games with retries
+async function update(games, browser, attempt = 1) {
+    const baseUrl = "https://fitgirl-repacks.site/all-my-repacks-a-z";
+    const content = await html(baseUrl, browser);
     if (!content) {
         log.error("update failed: no content");
+        if (attempt < maxRetries) {
+            log.info(`Retrying update (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+            return update(games, browser, attempt + 1);
+        }
         return games;
     }
 
@@ -211,49 +282,62 @@ async function update(games, browser) {
         );
         await page.goto("https://fitgirl-repacks.site/all-my-repacks-a-z", {
             waitUntil: "networkidle2",
-            timeout: 30000,
+            timeout: 60000,
         });
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
 
         // Extract number of pages
         const numPages = await page.evaluate(() => {
-            const lcp = document.body.innerHTML.match(/lcp_page0=[0-9]+/g);
-            return lcp
-                ? Number(lcp[lcp.length - 1]?.replace("lcp_page0=", "") || 0)
-                : 1;
+            const pagination = document.querySelector(".lcp_paginator");
+            if (!pagination) return 1;
+            const links = pagination.querySelectorAll("li");
+            if (links.length < 2) return 1;
+            const secondLastLink = links[links.length - 2];
+            return parseInt(secondLastLink.textContent.trim()) || 1;
         });
         log.data("pages", { total: numPages });
 
         let newGames = [];
-        for (let i = 1; i <= numPages; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 1000)); // 1-second delay to avoid rate-limiting
-            const pageUrl = `https://fitgirl-repacks.site/all-my-repacks-a-z/?lcp_page0=${i}`;
+        // Iterate through all pages
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            const pageUrl = `${baseUrl}/?lcp_page0=${pageNum}#lcp_instance_0`;
             await page.goto(pageUrl, {
                 waitUntil: "networkidle2",
-                timeout: 30000,
+                timeout: 60000,
             });
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
 
-            // Flexible game list selector
+            // Extract games from ul.lcp_catlist
             const gamesElements = await page.evaluate(() => {
-                const elements = document.querySelectorAll(
-                    "#lcp_instance_0 li, .game-list li, .post-list li"
-                );
-                return Array.from(elements)
-                    .map((el) => {
-                        const a = el.querySelector("a");
-                        return { name: a?.textContent.trim(), link: a?.href };
-                    })
+                const list = document.querySelector("ul.lcp_catlist");
+                if (!list) return [];
+                const items = list.querySelectorAll("li a");
+                return Array.from(items)
+                    .map((a) => ({
+                        name: a.textContent.trim(),
+                        link: a.href,
+                    }))
                     .filter((item) => item.name && item.link);
             });
 
+            log.data("scraped games", {
+                page: pageNum,
+                games: gamesElements.map((g) => g.name),
+            });
+
+            // Check for new games by comparing links
             for (const { name, link } of gamesElements) {
-                if (!games.find((game) => game.name === name)) {
+                if (!games.find((game) => game.link === link)) {
                     newGames.push({ id: id++, name, link });
+                    log.info("new game found", { name, link });
+                } else {
+                    log.debug("game already exists", { name, link });
                 }
             }
         }
 
         const updated = [...games, ...newGames];
-        log.data("details", {
+        log.data("update summary", {
             pages: numPages,
             existing: games.length,
             new: newGames.length,
@@ -264,8 +348,13 @@ async function update(games, browser) {
         await page.close();
         return updated;
     } catch (err) {
-        log.error("update failed", { error: err.message });
+        log.error("update failed", { attempt, error: err.message });
         await page.close();
+        if (attempt < maxRetries) {
+            log.info(`Retrying update (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+            return update(games, browser, attempt + 1);
+        }
         return games;
     }
 }
