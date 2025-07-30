@@ -1,6 +1,8 @@
 // This code was made to add the DDL links from FuckingFast and Datanodes to the FitGirl repacks database.
 // It uses Puppeteer to scrape the FitGirl repacks site and extract direct download links.
 // This was made because: the original code doesn't check already verified games, it doesn't retry on failure, and it doesn't save the direct links to the database.
+require("dotenv").config();
+
 const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
@@ -10,10 +12,10 @@ const log = require("@vladmandic/pilogger");
 puppeteer.use(StealthPlugin());
 
 // Configurable
-const file = "fitgirl.json";
-const debug = true; // Enabled for better debugging
-const maxRetries = 3; // Number of retry attempts for failed requests
-const retryDelay = 30000; // Delay between retries in ms
+const file = process.env.FILE;
+const baseUrl = process.env.BASE_URL;
+const maxRetries = parseInt(process.env.MAX_RETRIES);
+const retryDelay = parseInt(process.env.RETRY_DELAY);
 
 // Load game database from JSON
 async function load() {

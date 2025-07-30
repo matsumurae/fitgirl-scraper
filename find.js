@@ -1,54 +1,60 @@
+require("dotenv").config();
+
+const fs = require("fs");
 const process = require("process");
 const log = require("@vladmandic/pilogger");
-const fitgirl = require("./fitgirl");
 
-const topK = 40;
+const maxResults = 40;
+const file = process.env.FILE;
 
 async function load() {
-    const res = fs.readFileSync(file);
-    data = JSON.parse(res);
-    filtered = data.filter((d) => d.id);
-    log.data("load", {
-        file,
-        games: filtered.length,
-        verified: filtered.filter((g) => g.verified).length,
-    });
-    return filtered;
+    try {
+        const data = JSON.parse(fs.readFileSync(file));
+        const filtered = data.filter((d) => d.id);
+        log.data("load", {
+            file,
+            games: filtered.length,
+            verified: filtered.filter((g) => g.verified).length,
+        });
+        return filtered;
+    } catch (error) {
+        log.error("Failed to load JSON:", error.message);
+        return [];
+    }
 }
 
 async function main() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
-    const loaded = await fitgirl.load();
-    const games = loaded.map((l) => ({
-        name: l.name,
-        size: l.size,
-        date: l.date,
-        tags: l.tags?.join(" "),
-        link: l.link,
+
+    const games = (await load()).map(({ name, size, date, tags, link }) => ({
+        name,
+        size,
+        date,
+        tags: tags?.join(" ") || "",
+        link,
     }));
-    if (process.argv.length > 2) {
-        const s = process.argv[2].toLowerCase();
-        const found = games.filter(
-            (a) =>
-                a.name?.toLowerCase().includes(s) ||
-                a.tags?.toLowerCase().includes(s)
-        ); // .slice(0, Math.min(games.length, topK));
-        const search =
-            found
-                ?.sort((a, b) => b.date - a.date)
-                .slice(0, Math.min(games.length, topK)) || [];
-        log.data({ search: process.argv[2].toLowerCase(), results: search });
+
+    const searchTerm = process.argv[2]?.toLowerCase();
+    if (searchTerm) {
+        const found = games
+            .filter(
+                (game) =>
+                    game.name?.toLowerCase().includes(searchTerm) ||
+                    game.tags?.toLowerCase().includes(searchTerm)
+            )
+            .sort((a, b) => b.date - a.date)
+            .slice(0, maxResults);
+        log.data({ search: searchTerm, results: found });
     } else {
         const newest = games
             .sort((a, b) => b.date - a.date)
-            .slice(0, Math.min(games.length, topK));
+            .slice(0, maxResults);
         const largest = games
             .sort((a, b) => b.size - a.size)
-            .slice(0, Math.min(games.length, topK));
-        log.data({ newest });
-        log.data({ largest });
+            .slice(0, maxResults);
+        log.data({ newest, largest });
     }
 }
 
-main();
+main().catch((error) => log.error("Main error:", error.message));

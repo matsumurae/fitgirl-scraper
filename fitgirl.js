@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
@@ -7,10 +9,13 @@ const log = require("@vladmandic/pilogger");
 puppeteer.use(StealthPlugin());
 
 // Configurable
-const file = "fitgirl.json";
-const debug = true; // Enabled for better debugging
-const maxRetries = 3; // Number of retry attempts for failed requests
-const retryDelay = 30000; // Delay between retries in ms
+const file = process.env.FILE;
+const baseUrl = process.env.BASE_URL;
+const maxRetries = parseInt(process.env.MAX_RETRIES);
+const retryDelay = parseInt(process.env.RETRY_DELAY);
+let cache = JSON.parse(fs.readFileSync("cache.json", "utf8"));
+let cachedNumPages = cache.pages;
+let timeout = parseInt(process.env.TIMEOUT);
 
 // Internal counter
 let id = 1;
@@ -22,7 +27,7 @@ async function html(uri, browser, attempt = 1) {
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
-        await page.goto(uri, { waitUntil: "networkidle2", timeout: 60000 });
+        await page.goto(uri, { waitUntil: "networkidle2", timeout: timeout });
         const html = await page.content();
         await page.close();
         return html;
@@ -60,7 +65,7 @@ async function details(game, browser) {
         );
         await page.goto(game.link, {
             waitUntil: "networkidle2",
-            timeout: 60000,
+            timeout: timeout,
         });
 
         // More flexible date selector
@@ -263,7 +268,6 @@ async function save(games) {
 
 // Update list of games with retries
 async function update(games, browser, attempt = 1) {
-    const baseUrl = "https://fitgirl-repacks.site/all-my-repacks-a-z";
     const content = await html(baseUrl, browser);
     if (!content) {
         log.error("update failed: no content");
@@ -280,30 +284,37 @@ async function update(games, browser, attempt = 1) {
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
-        await page.goto("https://fitgirl-repacks.site/all-my-repacks-a-z", {
+        await page.goto(baseUrl, {
             waitUntil: "networkidle2",
-            timeout: 60000,
+            timeout: timeout,
         });
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
 
-        // Extract number of pages
-        const numPages = await page.evaluate(() => {
-            const pagination = document.querySelector(".lcp_paginator");
-            if (!pagination) return 1;
-            const links = pagination.querySelectorAll("li");
-            if (links.length < 2) return 1;
-            const secondLastLink = links[links.length - 2];
-            return parseInt(secondLastLink.textContent.trim()) || 1;
-        });
-        log.data("pages", { total: numPages });
+        // Extract number of pages only if not cached
+        if (cachedNumPages === null) {
+            cachedNumPages = await page.evaluate(() => {
+                const pagination = document.querySelector(".lcp_paginator");
+                if (!pagination) return 1;
+                const links = pagination.querySelectorAll("li");
+                if (links.length < 2) return 1;
+                const secondLastLink = links[links.length - 2];
+                return parseInt(secondLastLink.textContent.trim()) || 1;
+            });
+            log.data("pages", { total: cachedNumPages });
+            cache.pages = cachedNumPages;
+            // Save cached page count to a file for future runs
+            fs.writeFileSync("cache.json", JSON.stringify(cache, null, 2));
+        } else {
+            log.debug("using cached page count", { total: cachedNumPages });
+        }
 
-        let newGames = [];
+        let newGamesCount = 0;
         // Iterate through all pages
-        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+        for (let pageNum = 1; pageNum <= cachedNumPages; pageNum++) {
             const pageUrl = `${baseUrl}/?lcp_page0=${pageNum}#lcp_instance_0`;
             await page.goto(pageUrl, {
                 waitUntil: "networkidle2",
-                timeout: 60000,
+                timeout: timeout,
             });
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
 
@@ -328,25 +339,90 @@ async function update(games, browser, attempt = 1) {
             // Check for new games by comparing links
             for (const { name, link } of gamesElements) {
                 if (!games.find((game) => game.link === link)) {
-                    newGames.push({ id: id++, name, link });
+                    let newGame = {
+                        id: id++, // Ensure `id` is defined elsewhere
+                        name,
+                        link,
+                        date: new Date(),
+                        tags: [],
+                        creator: [],
+                        original: "",
+                        packed: "",
+                        size: 0,
+                        verified: false,
+                        magnet: null,
+                        direct: {},
+                    };
                     log.info("new game found", { name, link });
+
+                    // Fetch full details for the new game
+                    const [updatedGame, verified] = await details(
+                        newGame,
+                        browser
+                    );
+                    // Ensure the updated game has all required fields
+                    newGame = {
+                        id: updatedGame.id,
+                        name: updatedGame.name,
+                        link: updatedGame.link,
+                        date: updatedGame.date || new Date(),
+                        tags: updatedGame.tags || [],
+                        creator: updatedGame.creator || [],
+                        original: updatedGame.original || "",
+                        packed: updatedGame.packed || "",
+                        size: updatedGame.size || 0,
+                        verified: updatedGame.verified || false,
+                        magnet: updatedGame.magnet || null,
+                        direct: updatedGame.direct || {},
+                    };
+                    // Only save if the game has valid data
+                    if (
+                        newGame.verified ||
+                        newGame.size > 0 ||
+                        newGame.magnet ||
+                        Object.keys(newGame.direct).length > 0
+                    ) {
+                        games.push(newGame);
+                        await save(games); // Save to JSON immediately
+                        newGamesCount++;
+                        log.info("new game details saved", {
+                            name,
+                            link,
+                            verified: newGame.verified,
+                            size: newGame.size,
+                            date: newGame.date.toISOString(),
+                            tags: newGame.tags,
+                            creator: newGame.creator,
+                            magnet: newGame.magnet ? "present" : "absent",
+                            direct:
+                                Object.keys(newGame.direct).length > 0
+                                    ? "present"
+                                    : "absent",
+                        });
+                    } else {
+                        log.warn("skipping save: incomplete game data", {
+                            name,
+                            link,
+                            verified: newGame.verified,
+                            size: newGame.size,
+                        });
+                    }
                 } else {
                     log.debug("game already exists", { name, link });
                 }
             }
         }
 
-        const updated = [...games, ...newGames];
         log.data("update summary", {
-            pages: numPages,
-            existing: games.length,
-            new: newGames.length,
-            total: updated.length,
-            todo: updated.filter((g) => !g.verified).length,
+            pages: cachedNumPages,
+            existing: games.length - newGamesCount,
+            new: newGamesCount,
+            total: games.length,
+            todo: games.filter((g) => !g.verified).length,
         });
 
         await page.close();
-        return updated;
+        return games;
     } catch (err) {
         log.error("update failed", { attempt, error: err.message });
         await page.close();
