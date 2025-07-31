@@ -24,6 +24,14 @@ TIMEOUT=60000
 3. Run `npm start` to retrieve newest games
 4. Run `npm run find <name-here>` to search for a specific game
 
+### `update.js` or `cache.js`
+
+You can start from a specific point if it stopped.
+
+Use `--check-timestamps --start-index=100` on update.
+
+Use `--start-index=100` on cache.
+
 ### Why there's `ddl.js`
 
 It was made to add the DDL links from FuckingFast and Datanodes to the FitGirl repacks database. The original code doesn't allow to add ANY new info if it's a verified game… So I just added empty "direct" and checked all games to add the ones that had those providers.

@@ -6,7 +6,9 @@
     "scripts": {
         "start": "node --no-warnings --enable-source-maps fitgirl.js",
         "direct": "node --no-warnings --enable-source-maps ddl.js",
-        "find": "node --no-warnings --enable-source-maps find.js"
+        "find": "node --no-warnings --enable-source-maps find.js",
+        "update": "node --no-warnings --enable-source-maps update.js",
+        "cache": "node --no-warnings --enable-source-maps cache.js"
     },
     "keywords": [],
     "author": "Matsumurae",

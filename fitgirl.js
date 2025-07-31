@@ -11,6 +11,7 @@ puppeteer.use(StealthPlugin());
 // Configurable
 const file = process.env.FILE;
 const baseUrl = process.env.BASE_URL;
+const fullUrl = `${baseUrl}all-my-repacks-a-z`;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 let cache = JSON.parse(fs.readFileSync("cache.json", "utf8"));
@@ -70,9 +71,7 @@ async function details(game, browser) {
 
         // More flexible date selector
         const date = await page.evaluate(() => {
-            const dateEl = document.querySelector(
-                "time, .entry-date, .post-date, [datetime]"
-            );
+            const dateEl = document.querySelector("time.entry-date");
             if (dateEl && dateEl.getAttribute("datetime")) {
                 return dateEl.getAttribute("datetime");
             }
@@ -268,7 +267,7 @@ async function save(games) {
 
 // Update list of games with retries
 async function update(games, browser, attempt = 1) {
-    const content = await html(baseUrl, browser);
+    const content = await html(fullUrl, browser);
     if (!content) {
         log.error("update failed: no content");
         if (attempt < maxRetries) {
@@ -284,7 +283,7 @@ async function update(games, browser, attempt = 1) {
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
-        await page.goto(baseUrl, {
+        await page.goto(fullUrl, {
             waitUntil: "networkidle2",
             timeout: timeout,
         });
@@ -311,16 +310,16 @@ async function update(games, browser, attempt = 1) {
         let newGamesCount = 0;
         // Iterate through all pages
         for (let pageNum = 1; pageNum <= cachedNumPages; pageNum++) {
-            const pageUrl = `${baseUrl}/?lcp_page0=${pageNum}#lcp_instance_0`;
+            const pageUrl = `${fullUrl}/?lcp_page0=${pageNum}#lcp_instance_0`;
             await page.goto(pageUrl, {
                 waitUntil: "networkidle2",
                 timeout: timeout,
             });
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
 
-            // Extract games from ul.lcp_catlist
+            // Extract games
             const gamesElements = await page.evaluate(() => {
-                const list = document.querySelector("ul.lcp_catlist");
+                const list = document.querySelector("#lcp_instance_0");
                 if (!list) return [];
                 const items = list.querySelectorAll("li a");
                 return Array.from(items)

@@ -13,7 +13,6 @@ puppeteer.use(StealthPlugin());
 
 // Configurable
 const file = process.env.FILE;
-const baseUrl = process.env.BASE_URL;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 
