@@ -8,10 +8,10 @@ This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but a
 4. Keep the number of pages to avoid re-checking every time
 5. **Search** now uses the local JSON data instead of scraping again (saving time)
 
-## How to use it
+## How to install
 
-1. Install dependencies with `npm i`
-2. Add your `.env` file with
+1. `npm i`
+1. Add your `.env` file with
 
 ```env
 FILE=games.json
@@ -21,19 +21,41 @@ RETRY_DELAY=30000
 TIMEOUT=60000
 ```
 
-Here, you have three options:
+## How to use it
 
--   **Want to check if any saved game had updates?** Use `npm run date` to check if any had updates.
--   **Want to check if there's any new game?** Use `npm run fetch` and follow with `npm run compare`.
--   **Want to find a specific game?** Use `npm run find <name>`.
+### Want to check if any local game had updates?
 
-### `fetchAll.js`
+> Use `npm run date`
 
-This script scrapes all Fitgirl repacks from A to Z and adds them to a JSON. Then, use the `compare.js` to check which ones aren't on your JSON.
+This will update:
+
+-   Date
+-   lastChecked to know when was the last fetch
+-   Magnet link
+-   Direct links (datanodes and fuckingfast)
+
+### Want to check if there's any new game?
+
+> Use `npm run fetch` and follow with `npm run compare`
 
 **Be patient! This takes A LOT of time.**
 
-> You can start from a specific point if it stopped. State will be saved each time it goes to next page, but you can use `--check-timestamps --start-index=100` if you want to do it manually.
+1. `fetchAll.js` scrape all Fitgirl repacks from A to Z and adds them to a JSON (which you also have it available on the repo).
+2. Then, `compare.js` checks which games aren't on `games.json` and fetch the data on her website to add them.
+
+You can start from a specific point if it stopped. State will be saved each time it goes to next page, but you can use `--start-index=100` if you want to do it manually.
+
+If you want to check how many new games are, use `npm run count` and it'll show something like this:
+
+```
+DATA:  item counts { 'games.json': 3128, 'compare.json': 5873, 'unique to compare.json': 2784 }
+```
+
+### Want to find a specific game?
+
+> Use `npm run find <name>`.
+
+This will show a list of games that match your search.
 
 ### Why there's `ddl.js`
 

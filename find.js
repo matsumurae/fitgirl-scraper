@@ -21,7 +21,7 @@ async function load() {
         });
         return filtered;
     } catch (error) {
-        log.error("Failed to load JSON:", error.message);
+        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
         return [];
     }
 }

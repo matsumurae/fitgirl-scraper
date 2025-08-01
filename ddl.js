@@ -15,6 +15,7 @@ puppeteer.use(StealthPlugin());
 const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
+const timeout = parseInt(process.env.TIMEOUT);
 
 // Load game database from JSON
 async function load() {
@@ -46,7 +47,7 @@ async function load() {
         });
         return filtered;
     } catch (err) {
-        log.error("load failed", { file, error: err.message });
+        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
         return [];
     }
 }
@@ -62,7 +63,7 @@ async function save(games) {
             withDirect: games.filter((g) => g.direct).length,
         });
     } catch (err) {
-        log.error("save failed", { file, error: err.message });
+        log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
     }
 }
 
@@ -75,7 +76,7 @@ async function fetchDirectLinks(game, browser, attempt = 1) {
         );
         await page.goto(game.link, {
             waitUntil: "networkidle2",
-            timeout: 60000,
+            timeout: timeout,
         });
 
         // Get direct links without modifying game directly

@@ -85,10 +85,9 @@ async function updateCachePageCount(browser) {
             cache.pages = lastPageNum;
             cache.lastChecked = new Date().toISOString();
             fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
-            log.info("Updated cache", {
-                pages: lastPageNum,
-                lastChecked: cache.lastChecked,
-            });
+            log.info(
+                `⚡️ Updated cache. ${lastPageNum} is last page and ${cache.lastChecked} is last game checked.`
+            );
         } else if (!lastPageNum) {
             log.warn("Could not determine page count");
         }
@@ -114,23 +113,12 @@ async function saveGame(game, fileName) {
         if (!games.find((g) => g.link === game.link)) {
             games.push(game);
             fs.writeFileSync(fileName, JSON.stringify(games, null, 2));
-            log.info("Saved game to JSON", {
-                id: game.id,
-                name: game.name,
-                link: game.link,
-                savedTo: fileName,
-            });
+            log.info(`🔥 Saved ${game.name} to ${fileName}`);
         } else {
-            log.debug("Game already exists in JSON", {
-                name: game.name,
-                link: game.link,
-            });
+            log.debug(`${game.name} game already exists. Skipping…`);
         }
     } catch (err) {
-        log.error("Save game failed", {
-            file: fileName,
-            error: err.message,
-        });
+        log.error(`Save game failed. Error: ${err.message}`);
     }
 }
 
@@ -221,10 +209,9 @@ async function scrape() {
                         .filter((item) => item.name && item.link);
                 });
 
-                log.data("Scraped page", {
-                    page: pageNum,
-                    games: gamesElements.length,
-                });
+                log.data(
+                    `🔥 Scraped page ${pageNum} with ${gamesElements.length}`
+                );
 
                 // Process each game individually
                 for (const { name, link } of gamesElements) {
@@ -234,11 +221,7 @@ async function scrape() {
                         link,
                         page: pageNum,
                     };
-                    log.info("Found game", {
-                        id: game.id,
-                        name: game.name,
-                        link: game.link,
-                    });
+                    log.info(`🔎 Found new game: ${game.name}`);
                     await saveGame(game, "complete.json");
                 }
 
@@ -253,7 +236,7 @@ async function scrape() {
             }
         }
 
-        log.data("Scraping completed", { totalPages: cachedNumPages });
+        log.data(`🔥 Scraping complete!`);
     } finally {
         await browser.close();
     }

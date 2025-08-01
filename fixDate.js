@@ -9,6 +9,7 @@ puppeteer.use(StealthPlugin());
 const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
+const timeout = parseInt(process.env.TIMEOUT);
 const progressFile = "progress.json"; // New file to store progress
 
 // Load progress from JSON
@@ -29,7 +30,7 @@ async function loadProgress() {
         });
         return data;
     } catch (err) {
-        log.error("loadProgress failed", { progressFile, error: err.message });
+        log.error(`⚠️ Failed to load ${progressFile}. Error: ${err.message}`);
         return { lastCheckedIndex: 0 };
     }
 }
@@ -41,7 +42,7 @@ async function saveProgress(index) {
         fs.writeFileSync(progressFile, json);
         log.data("saveProgress", { progressFile, lastCheckedIndex: index });
     } catch (err) {
-        log.error("saveProgress failed", { progressFile, error: err.message });
+        log.error(`⚠️ Save ${progressFile} failed. Error: ${err.message}`);
     }
 }
 
@@ -70,7 +71,7 @@ async function load() {
         log.data("load", { file, games: filtered.length, notChecked });
         return filtered;
     } catch (err) {
-        log.error("load failed", { file, error: err.message });
+        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
         return [];
     }
 }
@@ -90,7 +91,7 @@ async function save(games) {
             notChecked,
         });
     } catch (err) {
-        log.error("save failed", { file, error: err.message });
+        log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
     }
 }
 
@@ -167,7 +168,7 @@ async function checkTimestampsAgainstWebsite(
                 );
                 await page.goto(game.link, {
                     waitUntil: "networkidle2",
-                    timeout: 60000,
+                    timeout: timeout,
                 });
 
                 // Get timestamp
@@ -228,12 +229,9 @@ async function checkTimestampsAgainstWebsite(
                         lastChecked: new Date().toISOString(),
                     };
                     fixedCount++;
-                    log.info("updated game date", {
-                        id: game.id,
-                        game: game.name,
-                        newDate: parsedWebsiteDate,
-                        lastChecked: games[i].lastChecked,
-                    });
+                    log.info(
+                        `${game.name} updated. ${parsedWebsiteDate} new date.`
+                    );
                     await save(games); // Save immediately after date update
 
                     // Scrape magnet and direct links
@@ -320,23 +318,16 @@ async function checkTimestampsAgainstWebsite(
                             magnet: websiteData.magnet,
                             direct: websiteData.direct,
                         };
-                        log.info("updated game data", {
-                            id: game.id,
-                            game: game.name,
-                            newData: {
-                                magnet: websiteData.magnet,
-                                direct: websiteData.direct,
-                            },
+                        log.info(`${game.name} updated. New data:`, {
+                            magnet: websiteData.magnet,
+                            direct: websiteData.direct,
                         });
                         await save(games); // Save again if data changes
                     }
 
                     // Additional fixes if requested
                     if (fix) {
-                        log.info("additional fix applied", {
-                            id: game.id,
-                            game: game.name,
-                        });
+                        log.info(`${game.name} fixed`);
                     }
                 } else {
                     log.debug("date match", {

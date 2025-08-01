@@ -2,10 +2,10 @@
     "name": "fitgirl-scraper",
     "version": "1.0.0",
     "description": "Scrappr for FitGirl Repacks. This script scrapes the FitGirl Repacks website to gather information and download links (magnet, FuckingFast and DataNodes).",
-    "main": "fitgirl.js",
+    "main": "compare.js",
     "scripts": {
-        "start": "node --no-warnings fitgirl.js",
-        "direct": "node --no-warnings ddl.js",
+        "compare": "node --no-warnings compare.js",
+        "count": "node --no-warnings compare.js --count-items",
         "find": "node --no-warnings find.js",
         "date": "node --no-warnings fixDate.js",
         "fetch": "node --no-warnings fetchAll.js"
