@@ -14,7 +14,7 @@ This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but a
 2. Add your `.env` file with
 
 ```env
-FILE=fitgirl.json
+FILE=games.json
 BASE_URL=https://fitgirl-repacks.site/
 MAX_RETRIES=3
 RETRY_DELAY=30000
