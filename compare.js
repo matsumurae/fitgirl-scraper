@@ -7,6 +7,13 @@ const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
+const {
+    configurePage,
+    fetchHtml,
+    normalizeLink,
+    saveFile,
+    loadFile,
+} = require("./utils");
 
 puppeteer.use(StealthPlugin());
 
@@ -17,20 +24,10 @@ const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
 
-// Normalize links for comparison to avoid false negatives
-function normalizeLink(link) {
-    return link
-        .toLowerCase()
-        .replace(/\/$/, "") // Remove trailing slash
-        .replace(/^https?:\/\//, ""); // Remove protocol
-}
-
 async function loadCache() {
     try {
         if (!fs.existsSync(cacheFile)) {
-            log.warn("loadCache: file does not exist, creating empty file", {
-                cacheFile,
-            });
+            log.warn(`${cacheFile} does not exist, creating empty file…`);
             const defaultCache = {
                 pages: 0,
                 lastChecked: new Date().toISOString(),
@@ -62,40 +59,6 @@ async function saveCache(cache) {
     }
 }
 
-async function fetchHtml(uri, browser, attempt = 1) {
-    try {
-        const page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await page.goto(uri, { waitUntil: "networkidle2", timeout: timeout });
-        const html = await page.content();
-        await page.close();
-        return html;
-    } catch (err) {
-        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
-            log.error("Connection refused by server", { uri, attempt });
-            if (attempt < maxRetries) {
-                log.info(
-                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
-                );
-                await new Promise((resolve) => setTimeout(resolve, retryDelay));
-                return fetchHtml(uri, browser, attempt + 1);
-            }
-            log.error("All retries failed for", { uri });
-            return "";
-        }
-        log.warn("fetch error", { uri, attempt, error: err.message });
-        if (attempt < maxRetries) {
-            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
-            await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            return fetchHtml(uri, browser, attempt + 1);
-        }
-        log.error("fetch failed after retries", { uri, error: err.message });
-        return "";
-    }
-}
-
 async function details(game, browser) {
     let page = null;
     try {
@@ -109,9 +72,7 @@ async function details(game, browser) {
         }
 
         page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
+        await configurePage(page);
         await page.goto(game.link, {
             waitUntil: "networkidle2",
             timeout: timeout,
@@ -244,55 +205,11 @@ async function details(game, browser) {
     }
 }
 
-async function load() {
-    try {
-        if (!fs.existsSync(file)) {
-            log.warn("load: file does not exist, creating empty file", {
-                file,
-            });
-            fs.writeFileSync(file, JSON.stringify([]));
-        }
-        const res = fs.readFileSync(file);
-        const data = JSON.parse(res);
-        const filtered = data.filter((d) => d.link);
-        log.info(`Loaded ${filtered.length} games from ${file}`);
-        for (const game of filtered) {
-            game.date = new Date(game.date);
-            game.verified = !!(game.magnet && game.size > 0); // Ensure existing games are re-evaluated
-            game.size = Math.round(10 * game.size) / 10;
-            game.lastChecked = game.lastChecked || new Date().toISOString();
-        }
-        log.data(
-            `Reading ${file}… It has ${filtered.length} and ${
-                filtered.filter((g) => g.verified).length
-            } verified.`
-        );
-        return { games: filtered };
-    } catch (err) {
-        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
-        return { games: [] };
-    }
-}
-
-async function save(games) {
-    try {
-        const json = JSON.stringify(games, null, 2);
-        fs.writeFileSync(file, json);
-        log.data(
-            `${games.length} saved! ${
-                games.filter((g) => g.verified).length
-            } verified.`
-        );
-    } catch (err) {
-        log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
-    }
-}
-
 async function loadComplete() {
     const completeFile = "complete.json";
     try {
         if (!fs.existsSync(completeFile)) {
-            log.warn("⚠️ loadComplete: file does not exist", { completeFile });
+            log.warn(`⚠️ loadComplete: ${completeFile} does not exist`);
             log.warn("💡 Hint: Run 'npm run fetch' to get the data.");
             return [];
         }
@@ -435,7 +352,7 @@ async function processTempGames(games, browser) {
             Object.keys(newGame.direct).length > 0
         ) {
             games.push(newGame);
-            await save(games);
+            await saveFile(newGame, file, { isSingleGame: true });
             log.info(`${newGame.name} game saved.`, {
                 link: newGame.link,
                 size: newGame.size,
@@ -472,14 +389,14 @@ async function processTempGames(games, browser) {
 
 async function countItems() {
     try {
-        const gamesData = await load();
-        const gamesCount = gamesData.games.length;
+        const games = await loadFile(file);
+        const gamesCount = games.length;
         const completeGames = await loadComplete();
         const completeCount = completeGames.length;
         const tempGames = await loadTemp();
         const tempCount = tempGames.length;
         const gamesLinks = new Set(
-            gamesData.games.map((game) => normalizeLink(game.link))
+            games.map((game) => normalizeLink(game.link))
         );
         const uniqueToComplete = completeGames.filter(
             (game) => !gamesLinks.has(normalizeLink(game.link))
@@ -487,7 +404,7 @@ async function countItems() {
 
         log.data(
             `🔥 ${gamesCount} on games.json and ${
-                gamesData.games.filter((g) => g.verified).length
+                games.filter((g) => g.verified).length
             } verified.`
         );
         log.data(`✨ ${completeCount} on complete.json`);
@@ -531,7 +448,7 @@ async function main() {
     });
 
     try {
-        const { games } = await load();
+        const games = await loadFile(file);
         log.info(`Loaded ${games.length} games from ${file}`);
         const cache = await loadCache();
 
@@ -549,13 +466,13 @@ async function main() {
             finalGames = await processTempGames(games, browser);
         }
 
-        await save(finalGames);
+        await saveFile(finalGames);
         for (let i = 0; i < finalGames.length; i++) {
             const [game, update] = await details(finalGames[i], browser);
             finalGames[i] = game;
-            if (update) await save(finalGames);
+            if (update) await saveFile(finalGames);
         }
-        await save(finalGames);
+        await saveFile(finalGames);
         cache.lastChecked = new Date().toISOString();
         await saveCache(cache);
     } finally {
@@ -571,8 +488,6 @@ if (require.main === module) {
         main();
     }
 } else {
-    exports.load = load;
-    exports.save = save;
     exports.update = update;
     exports.details = details;
     exports.loadCache = loadCache;
