@@ -1,4 +1,4 @@
-# Fitgirl scrapper
+# Fitgirl scraper
 
 This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but as of today, it doesn't work. That's why I took the project and…
 

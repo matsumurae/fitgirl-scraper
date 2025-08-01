@@ -1,7 +1,7 @@
 {
-    "name": "fitgirl-scrapper",
+    "name": "fitgirl-scraper",
     "version": "1.0.0",
-    "description": "Scrapper for FitGirl Repacks. This script scrapes the FitGirl Repacks website to gather information and download links (magnet, FuckingFast and DataNodes).",
+    "description": "Scrappr for FitGirl Repacks. This script scrapes the FitGirl Repacks website to gather information and download links (magnet, FuckingFast and DataNodes).",
     "main": "fitgirl.js",
     "scripts": {
         "start": "node --no-warnings fitgirl.js",
