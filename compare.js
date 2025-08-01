@@ -7,7 +7,7 @@ const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
-const { configurePage, fetchHtml, saveFile, loadFile } = require("./utils");
+const { saveFile, loadFile, details } = require("./utils");
 
 puppeteer.use(StealthPlugin());
 
@@ -50,152 +50,6 @@ async function saveCache(cache) {
         log.data(`✅ Saved cache on ${cacheFile}!`);
     } catch (err) {
         log.error(`⚠️ Failed to load ${cacheFile}. Error: ${err.message}`);
-    }
-}
-
-async function details(game, browser) {
-    let page = null;
-    try {
-        const content = await fetchHtml(game.link, browser);
-        if (!content) {
-            log.warn("details: no content fetched", {
-                id: game.id,
-                game: game.name,
-            });
-            return [game, false];
-        }
-
-        page = await browser.newPage();
-        await configurePage(page);
-        await page.goto(game.link, {
-            waitUntil: "networkidle2",
-            timeout: timeout,
-        });
-
-        const date = await page.evaluate(() => {
-            const dateEl = document.querySelector("time.entry-date");
-            return dateEl?.getAttribute("datetime") || null;
-        });
-        game.date = date ? new Date(date) : new Date();
-
-        const contentText = await page.evaluate(() => {
-            const content = document.querySelector(
-                ".entry-content, .post-content, article, .content"
-            );
-            return content
-                ? content.textContent.replace(/\n+/g, "\n").split("\n")
-                : [];
-        });
-        if (!contentText.length) {
-            log.warn("details: no content found", {
-                id: game.id,
-                game: game.name,
-            });
-            await page.close();
-            return [game, false];
-        }
-
-        for (const line of contentText) {
-            if (line.match(/genres|tags/i))
-                game.tags = line
-                    .replace(/.*:/, "")
-                    .trim()
-                    .split(", ")
-                    .filter(Boolean);
-            if (line.match(/compan(y|ies)/i))
-                game.creator = line
-                    .replace(/.*compan(y|ies).*?:/i, "")
-                    .trim()
-                    .split(", ")
-                    .filter(Boolean);
-            if (line.match(/original size/i))
-                game.original = line.replace(/.*original size.*?:/i, "").trim();
-            if (line.match(/repack size/i))
-                game.packed = line
-                    .replace(/.*repack size.*?:/i, "")
-                    .replace(/\[.*\]/, "")
-                    .trim();
-        }
-
-        const packed = game.packed
-            ? Number(
-                  game.packed.replace(",", ".").match(/(\d+(\.\d+)?)/)?.[0] || 0
-              )
-            : 0;
-        const original = game.original
-            ? Number(
-                  game.original.replace(",", ".").match(/(\d+(\.\d+)?)/)?.[0] ||
-                      0
-              )
-            : 0;
-        game.size = Math.max(packed, original);
-        if (game?.size > 0 && game.original?.includes("MB")) game.size /= 1024;
-
-        game.direct = await page.evaluate(() => {
-            const directLinks = {};
-            const ddl = Array.from(document.querySelectorAll("h3")).find((el) =>
-                el.textContent.includes("Download Mirrors (Direct Links)")
-            );
-            if (ddl) {
-                const ul =
-                    Array.from(ddl.parentElement.children).find(
-                        (el) => el.tagName === "UL" && el !== ddl
-                    ) || null;
-                if (ul) {
-                    const items = ul.querySelectorAll("li");
-                    for (const item of items) {
-                        const text = item.textContent.toLowerCase();
-                        let host = null;
-                        if (text.includes("datanodes")) {
-                            host = "datanodes";
-                        } else if (text.includes("fuckingfast")) {
-                            host = "fuckingfast";
-                        }
-                        if (host) {
-                            directLinks[host] = directLinks[host] || [];
-                            const spoilerContent = item.querySelector(
-                                ".su-spoiler-content"
-                            );
-                            if (spoilerContent) {
-                                const spoilerLinks = Array.from(
-                                    spoilerContent.querySelectorAll("a")
-                                ).map((a) => a.href);
-                                directLinks[host].push(...spoilerLinks);
-                            }
-                        }
-                    }
-                }
-            }
-            return directLinks;
-        });
-
-        const magnet = await page.evaluate(() => {
-            const href = document.querySelector('a[href*="magnet"]');
-            return href ? href.getAttribute("href") : null;
-        });
-        if (magnet) game.magnet = magnet;
-
-        // Set verified to true only if both magnet and size > 0 exist
-        game.verified = !!(game.magnet && game.size > 0);
-        game.lastChecked = new Date().toISOString();
-
-        log.data(`${game.name} added.`, {
-            link: game.link,
-            size: game.size,
-            direct: game.direct,
-            magnet: game.magnet,
-        });
-
-        await page.close();
-        return [game, game.verified];
-    } catch (err) {
-        log.warn("details error", {
-            id: game.id,
-            game: game.name,
-            error: err.message,
-        });
-        if (page) await page.close();
-        return [game, false];
     }
 }
 
@@ -312,7 +166,7 @@ async function processTempGames(games, browser) {
 
     log.info(`Processing ${tempGames.length} games from temp.json`);
     for (let i = 0; i < tempGames.length; i++) {
-        log.info(`🔎 scraping details for ${tempGames[i].name} game`);
+        log.info(`🔎 scraping details for ${tempGames[i].name}`);
         const [updatedGame, verified] = await details(tempGames[i], browser);
         const newGame = {
             id: updatedGame.id,
@@ -324,7 +178,7 @@ async function processTempGames(games, browser) {
             original: updatedGame.original || "",
             packed: updatedGame.packed || "",
             size: updatedGame.size || 0,
-            verified: updatedGame.verified, // Use the verified value from details
+            verified: updatedGame.verified,
             magnet: updatedGame.magnet || null,
             direct: updatedGame.direct || {},
             lastChecked: updatedGame.lastChecked || new Date().toISOString(),
@@ -471,8 +325,6 @@ if (require.main === module) {
         main();
     }
 } else {
-    exports.update = update;
-    exports.details = details;
     exports.loadCache = loadCache;
     exports.saveCache = saveCache;
     exports.countItems = countItems;

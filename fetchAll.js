@@ -1,20 +1,33 @@
 require("dotenv").config();
+
 const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
 const yargs = require("yargs");
-const { configurePage, fetchHtml, saveFile } = require("./utils");
+const {
+    configurePage,
+    fetchHtml,
+    loadFile,
+    saveFile,
+    details,
+} = require("./utils");
 
 // Add stealth plugin to Puppeteer
 puppeteer.use(StealthPlugin());
 
 // Command-line arguments
-const argv = yargs.option("start-index", {
-    type: "number",
-    default: 1,
-    description: "Starting page index",
-}).argv;
+const argv = yargs
+    .option("start-index", {
+        type: "number",
+        default: 1,
+        description: "Starting page index",
+    })
+    .option("all", {
+        type: "boolean",
+        default: false,
+        description: "Scrape all A-Z content",
+    }).argv;
 
 // Configurable
 const baseUrl = process.env.BASE_URL;
@@ -40,7 +53,6 @@ async function updateCachePageCount(browser) {
             if (!paginator) return null;
             const links = paginator.querySelectorAll("a");
             if (links.length < 2) return 1;
-            // Get penultimate link (last number before "Next page")
             const penultimateLink = links[links.length - 2];
             return parseInt(penultimateLink.getAttribute("title")) || 1;
         });
@@ -92,8 +104,160 @@ function loadState() {
     }
 }
 
-// Main scraping function
-async function scrape() {
+// Scrape newest games from page 1
+async function scrapeNewestGames(browser) {
+    const page = await browser.newPage();
+    let currentPageUrl = baseUrl;
+    let hasNextPage = true;
+
+    try {
+        await configurePage(page);
+
+        while (hasNextPage) {
+            // Navigate to the current page
+            await page.goto(currentPageUrl, {
+                waitUntil: "networkidle2",
+                timeout: timeout,
+            });
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+
+            // Step 2: Select all articles and extract data
+            const articles = await page.evaluate(() => {
+                const articleNodes = document.querySelectorAll("article");
+                return Array.from(articleNodes)
+                    .slice(1) // Skip the first article
+                    .map((article) => {
+                        const time = article.querySelector("time.entry-date");
+                        const titleLink =
+                            article.querySelector(".entry-title > a");
+                        return {
+                            timestamp: time?.getAttribute("datetime"),
+                            name: titleLink?.textContent.trim(),
+                            link: titleLink?.href,
+                        };
+                    })
+                    .filter((item) => item.timestamp && item.name && item.link);
+            });
+
+            // Check if the first article's timestamp is older than lastChecked
+            const lastChecked = new Date(cache.lastChecked);
+            if (
+                articles.length > 0 &&
+                new Date(articles[0].timestamp) <= lastChecked
+            ) {
+                log.info(
+                    `🛑 Stopping pagination: First article on page is older than ${lastChecked.toISOString()}`
+                );
+                break;
+            }
+
+            log.data(
+                `🔥 Found ${articles.length} articles on page ${currentPageUrl}`
+            );
+
+            // Load existing games from games.json
+            const existingGames = await loadFile(file);
+            const existingLinks = new Set(
+                existingGames.map((game) => game.link)
+            );
+            let maxId =
+                existingGames.length > 0
+                    ? Math.max(...existingGames.map((g) => g.id))
+                    : 0;
+
+            // Step 3: Filter articles newer than cache.lastChecked
+            const newArticles = articles.filter(
+                (article) => new Date(article.timestamp) > lastChecked
+            );
+
+            log.data(
+                `🔎 Found ${
+                    newArticles.length
+                } new articles since ${lastChecked.toISOString()} on page ${currentPageUrl}`
+            );
+
+            // Step 4 & 5: Process new articles not in games.json and fetch details
+            for (const { name, link, timestamp } of newArticles) {
+                if (!existingLinks.has(link)) {
+                    const game = {
+                        id: ++maxId,
+                        name,
+                        link,
+                        timestamp,
+                    };
+                    log.info(`🔎 Found new game: ${game.name} (${game.link})`);
+
+                    // Fetch details using the shared details function
+                    const [updatedGame, verified] = await details(
+                        game,
+                        browser
+                    );
+                    if (
+                        verified ||
+                        updatedGame.size > 0 ||
+                        updatedGame.magnet ||
+                        Object.keys(updatedGame.direct).length > 0
+                    ) {
+                        const newGame = {
+                            id: updatedGame.id,
+                            name: updatedGame.name,
+                            link: updatedGame.link,
+                            date: updatedGame.date,
+                            tags: updatedGame.tags || [],
+                            creator: updatedGame.creator || [],
+                            original: updatedGame.original || "",
+                            packed: updatedGame.packed || "",
+                            size: updatedGame.size || 0,
+                            verified: updatedGame.verified,
+                            magnet: updatedGame.magnet || null,
+                            direct: updatedGame.direct || {},
+                            lastChecked:
+                                updatedGame.lastChecked ||
+                                new Date().toISOString(),
+                        };
+                        await saveFile(newGame, file, { isSingleGame: true });
+                        log.info(`✅ Saved new game: ${newGame.name}`);
+                    } else {
+                        log.warn(
+                            `⚠️ Skipping save for ${game.name}: incomplete data`
+                        );
+                    }
+                } else {
+                    log.debug(
+                        `Game already exists in games.json: ${name} (${link})`
+                    );
+                }
+            }
+
+            // Check for next page
+            const nextPageLink = await page.evaluate(() => {
+                const nextButton = document.querySelector(".pagination .next");
+                return nextButton ? nextButton.href : null;
+            });
+
+            if (nextPageLink) {
+                log.info(`🔗 Found next page: ${nextPageLink}`);
+                currentPageUrl = nextPageLink;
+            } else {
+                log.info("🛑 No next page found, stopping pagination");
+                hasNextPage = false;
+            }
+        }
+
+        // Update lastChecked timestamp
+        cache.lastChecked = new Date().toISOString();
+        fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+        log.info(`⚡️ Updated lastChecked to ${cache.lastChecked}`);
+
+        await page.close();
+    } catch (err) {
+        log.error("Newest games scraping failed", { error: err.message });
+        await page.close();
+    }
+}
+
+// Main scraping function for all pages
+async function scrapeAll() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
 
@@ -150,7 +314,7 @@ async function scrape() {
                 });
 
                 log.data(
-                    `🔥 Scraped page ${pageNum} with ${gamesElements.length}`
+                    `🔥 Scraped page ${pageNum} with ${gamesElements.length} games`
                 );
 
                 // Process each game individually
@@ -184,6 +348,31 @@ async function scrape() {
     }
 }
 
+// Main execution
+async function main() {
+    log.configure({ inspect: { breakLength: 500 } });
+    log.headerJson();
+
+    const browser = await puppeteer.launch({
+        headless: true,
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--ignore-certificate-errors",
+        ],
+    });
+
+    try {
+        if (argv.all) {
+            await scrapeAll();
+        } else {
+            await scrapeNewestGames(browser);
+        }
+    } finally {
+        await browser.close();
+    }
+}
+
 if (require.main === module) {
-    scrape();
+    main();
 }

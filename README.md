@@ -38,10 +38,14 @@ This will update:
 
 > Use `npm run fetch` and follow with `npm run compare`
 
-**Be patient! This takes a bit of time.**
+**If you don't have a `complete.json` file… Be patient! This takes a bit of time.**
 
-1. `fetchAll.js` scrape all Fitgirl repacks from A to Z and adds them to a JSON (which you also have it available on the repo).
-2. Then, `compare.js` checks which games aren't on `games.json` and fetch the data on her website to add them.
+With `fetchAll.js` you can do two things:
+
+-   Scrape all Fitgirl repacks from A to Z and adds them to `complete.json`. For this, use the flag `--all`.
+-   Scrape only new games, if you have a `lastChecked` inside `cache.json`.
+
+Then, `compare.js` checks which games aren't on `games.json` and fetch the data on her website to add them.
 
 You can start from a specific point if it stopped. State will be saved each time it goes to next page, but you can use `--start-index=100` if you want to do it manually.
 
