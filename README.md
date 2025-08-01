@@ -16,9 +16,9 @@ This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but a
 ```env
 FILE=games.json
 BASE_URL=https://fitgirl-repacks.site/
-MAX_RETRIES=3
+MAX_RETRIES=5
 RETRY_DELAY=30000
-TIMEOUT=60000
+TIMEOUT=30000
 ```
 
 ## How to use it

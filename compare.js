@@ -7,13 +7,7 @@ const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
-const {
-    configurePage,
-    fetchHtml,
-    normalizeLink,
-    saveFile,
-    loadFile,
-} = require("./utils");
+const { configurePage, fetchHtml, saveFile, loadFile } = require("./utils");
 
 puppeteer.use(StealthPlugin());
 
@@ -262,39 +256,34 @@ async function deleteTemp() {
     }
 }
 
-async function update(games, cache, browser) {
+async function checkGames(games) {
     const completeGames = await loadComplete();
+    const existingGames = await loadFile(file);
     let newGamesCount = 0;
     let tempGames = await loadTemp();
 
-    log.debug(
-        "Games links:",
-        games.map((g) => g.link)
-    );
-    log.debug(
-        "Complete games links:",
-        completeGames.map((g) => g.link)
-    );
+    // Create a Set of normalized links from games.json
+    const existingLinks = new Set(existingGames.map((game) => game.link));
+
+    // Log the number of games that are in complete.json but not in games.json
+    const uniqueToComplete = completeGames.filter(
+        (game) => !existingLinks.has(game.link)
+    ).length;
+    log.data(`⚠️ ${uniqueToComplete} missing games.`);
 
     for (const completeGame of completeGames) {
-        if (
-            !games.find(
-                (game) =>
-                    normalizeLink(game.link) ===
-                    normalizeLink(completeGame.link)
-            )
-        ) {
+        if (!existingLinks.has(completeGame.link)) {
             let newGame = {
-                id: games.length + tempGames.length + newGamesCount + 1,
+                id: existingGames.length + 1,
                 name: completeGame.name,
                 link: completeGame.link,
                 lastChecked: new Date().toISOString(),
             };
-            log.info(`🔎 new game ${newGame.name} found from complete.json`);
+            log.info(`🔎 New game ${newGame.name} found from complete.json`);
             tempGames.push(newGame);
             newGamesCount++;
         } else {
-            log.debug("game already exists", {
+            log.debug("Game already exists in games.json", {
                 name: completeGame.name,
                 link: completeGame.link,
             });
@@ -307,14 +296,10 @@ async function update(games, cache, browser) {
     }
 
     log.data(
-        `${
-            games.length
-        } updated. ${newGamesCount} are new, that makes a total of ${
-            games.length + newGamesCount
-        }. You're missing ${tempGames.length}`
+        `${existingGames.length} in games.json. ${newGamesCount} new games added to temp.json, total in temp.json: ${tempGames.length}. You're missing ${uniqueToComplete} games.`
     );
 
-    return { games, tempGames };
+    return { games: existingGames, tempGames };
 }
 
 async function processTempGames(games, browser) {
@@ -395,11 +380,9 @@ async function countItems() {
         const completeCount = completeGames.length;
         const tempGames = await loadTemp();
         const tempCount = tempGames.length;
-        const gamesLinks = new Set(
-            games.map((game) => normalizeLink(game.link))
-        );
+        const gamesLinks = new Set(games.map((game) => game.link));
         const uniqueToComplete = completeGames.filter(
-            (game) => !gamesLinks.has(normalizeLink(game.link))
+            (game) => !gamesLinks.has(game.link)
         ).length;
 
         log.data(
@@ -458,7 +441,7 @@ async function main() {
         if (tempGames.length === 0) {
             log.info("‼️ No temp.json found or empty, running update...");
             const { games: updatedGames, tempGames: updatedTempGames } =
-                await update(games, cache, browser);
+                await checkGames(games);
             log.info(`Update completed. 🔎 Found ${updatedTempGames.length}`);
             finalGames = await processTempGames(updatedGames, browser);
         } else {

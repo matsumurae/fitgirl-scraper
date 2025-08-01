@@ -1,14 +1,6 @@
 const log = require("@vladmandic/pilogger");
 const fs = require("fs");
 
-// Normalize links for comparison to avoid false negatives
-async function normalizeLink(link) {
-    return link
-        .toLowerCase()
-        .replace(/\/$/, "") // Remove trailing slash
-        .replace(/^https?:\/\//, ""); // Remove protocol
-}
-
 // Configure page with common settings
 async function configurePage(page) {
     await page.setUserAgent(
@@ -159,7 +151,6 @@ async function saveFile(data, file = process.env.FILE, options = {}) {
 module.exports = {
     configurePage,
     fetchHtml,
-    normalizeLink,
     loadFile,
     saveFile,
 };
