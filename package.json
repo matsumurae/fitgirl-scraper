@@ -4,11 +4,11 @@
     "description": "Scrapper for FitGirl Repacks. This script scrapes the FitGirl Repacks website to gather information and download links (magnet, FuckingFast and DataNodes).",
     "main": "fitgirl.js",
     "scripts": {
-        "start": "node --no-warnings --enable-source-maps fitgirl.js",
-        "direct": "node --no-warnings --enable-source-maps ddl.js",
-        "find": "node --no-warnings --enable-source-maps find.js",
-        "update": "node --no-warnings --enable-source-maps update.js",
-        "cache": "node --no-warnings --enable-source-maps cache.js"
+        "start": "node --no-warnings fitgirl.js",
+        "direct": "node --no-warnings ddl.js",
+        "find": "node --no-warnings find.js",
+        "date": "node --no-warnings fixDate.js",
+        "fetch": "node --no-warnings fetchAll.js"
     },
     "keywords": [],
     "author": "Matsumurae",

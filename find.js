@@ -1,3 +1,6 @@
+// This search games inside the JSON file
+// It can be used to find a specific game or to show the newest/largest games
+// Usage: node run find <search-term>
 require("dotenv").config();
 
 const fs = require("fs");

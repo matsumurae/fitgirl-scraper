@@ -15,22 +15,25 @@ This originally came from [fitgirl](https://github.com/vladmandic/fitgirl) but a
 
 ```env
 FILE=fitgirl.json
-BASE_URL=https://fitgirl-repacks.site/all-my-repacks-a-z
+BASE_URL=https://fitgirl-repacks.site/
 MAX_RETRIES=3
 RETRY_DELAY=30000
 TIMEOUT=60000
 ```
 
-3. Run `npm start` to retrieve newest games
-4. Run `npm run find <name-here>` to search for a specific game
+Here, you have three options:
 
-### `update.js` or `cache.js`
+-   **Want to check if any saved game had updates?** Use `npm run date` to check if any had updates.
+-   **Want to check if there's any new game?** Use `npm run fetch` and follow with `npm run compare`.
+-   **Want to find a specific game?** Use `npm run find <name>`.
 
-You can start from a specific point if it stopped.
+### `fetchAll.js`
 
-Use `--check-timestamps --start-index=100` on update.
+This script scrapes all Fitgirl repacks from A to Z and adds them to a JSON. Then, use the `compare.js` to check which ones aren't on your JSON.
 
-Use `--start-index=100` on cache.
+**Be patient! This takes A LOT of time.**
+
+> You can start from a specific point if it stopped. State will be saved each time it goes to next page, but you can use `--check-timestamps --start-index=100` if you want to do it manually.
 
 ### Why there's `ddl.js`
 
@@ -41,3 +44,4 @@ It was made to add the DDL links from FuckingFast and Datanodes to the FitGirl r
 -   I've kept `pilogger` because it looks so cool to see all that colors on console… Pretty easy to check each info.
 -   Removed `jquery` and `jsdom` as they didn't serve now… Changed with **puppeteer**.
 -   Added `dotenv` to keep static info easily available.
+-   Added `lastChecked` on JSON to know when was the last time `fixDate` was run.
