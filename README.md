@@ -38,17 +38,23 @@ This will update:
 
 > Use `npm run fetch` and follow with `npm run compare`
 
-**Be patient! This takes A LOT of time.**
+**Be patient! This takes a bit of time.**
 
 1. `fetchAll.js` scrape all Fitgirl repacks from A to Z and adds them to a JSON (which you also have it available on the repo).
 2. Then, `compare.js` checks which games aren't on `games.json` and fetch the data on her website to add them.
 
 You can start from a specific point if it stopped. State will be saved each time it goes to next page, but you can use `--start-index=100` if you want to do it manually.
 
-If you want to check how many new games are, use `npm run count` and it'll show something like this:
+If you want to check how many new games are, use `npm run count` after running `npm run fetch` and it'll show something like this:
 
 ```
-DATA:  item counts { 'games.json': 3128, 'compare.json': 5873, 'unique to compare.json': 2784 }
+Loaded 3253 games from games.json
+Reading games.json… It has 3253 and 3251 verified.
+✅ complete.json loaded correctly! It has 5873 games.
+🔥 3253 on games.json and 3251 verified.
+✨ 5873 on complete.json
+📝 2667 on temp.json
+⚠️ 2669 missing games.
 ```
 
 ### Want to find a specific game?

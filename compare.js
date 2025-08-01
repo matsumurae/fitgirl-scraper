@@ -56,7 +56,7 @@ async function saveCache(cache) {
     try {
         const json = JSON.stringify(cache, null, 2);
         fs.writeFileSync(cacheFile, json);
-        log.data("Saved cache!");
+        log.data(`✅ Saved cache on ${cacheFile}!`);
     } catch (err) {
         log.error(`⚠️ Failed to load ${cacheFile}. Error: ${err.message}`);
     }
@@ -97,6 +97,7 @@ async function fetchHtml(uri, browser, attempt = 1) {
 }
 
 async function details(game, browser) {
+    let page = null;
     try {
         const content = await fetchHtml(game.link, browser);
         if (!content) {
@@ -107,7 +108,7 @@ async function details(game, browser) {
             return [game, false];
         }
 
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
@@ -219,8 +220,8 @@ async function details(game, browser) {
         });
         if (magnet) game.magnet = magnet;
 
-        game.verified =
-            game.size > 0 && game.magnet && Object.keys(game.direct).length > 0;
+        // Set verified to true only if both magnet and size > 0 exist
+        game.verified = !!(game.magnet && game.size > 0);
         game.lastChecked = new Date().toISOString();
 
         log.data(`${game.name} added.`, {
@@ -238,7 +239,7 @@ async function details(game, browser) {
             game: game.name,
             error: err.message,
         });
-        await page.close();
+        if (page) await page.close();
         return [game, false];
     }
 }
@@ -254,10 +255,10 @@ async function load() {
         const res = fs.readFileSync(file);
         const data = JSON.parse(res);
         const filtered = data.filter((d) => d.link);
-        log.info(`Loaded ${filtered.length} games from ${file}`, { file });
+        log.info(`Loaded ${filtered.length} games from ${file}`);
         for (const game of filtered) {
             game.date = new Date(game.date);
-            game.verified = game.verified === true && game.size > 0;
+            game.verified = !!(game.magnet && game.size > 0); // Ensure existing games are re-evaluated
             game.size = Math.round(10 * game.size) / 10;
             game.lastChecked = game.lastChecked || new Date().toISOString();
         }
@@ -299,11 +300,7 @@ async function loadComplete() {
         const data = JSON.parse(res);
         const filtered = data.filter((d) => d.link);
         log.data(
-            `✅ complete.json loaded correctly! It has ${
-                filtered.length
-            } games and ${
-                filtered.filter((g) => g.verified).length
-            } verified games.`
+            `✅ complete.json loaded correctly! It has ${filtered.length} games.`
         );
         return filtered;
     } catch (err) {
@@ -331,7 +328,7 @@ async function saveTemp(games) {
     try {
         const json = JSON.stringify(games, null, 2);
         fs.writeFileSync(tempFile, json);
-        log.data(`Checked games. Saved ${games.length}`);
+        log.data(`Checked games. Remaining ${games.length} games`);
     } catch (err) {
         log.error(`⚠️ Save ${tempFile} failed. Error: ${err.message}`);
     }
@@ -425,7 +422,7 @@ async function processTempGames(games, browser) {
             original: updatedGame.original || "",
             packed: updatedGame.packed || "",
             size: updatedGame.size || 0,
-            verified: updatedGame.verified || false,
+            verified: updatedGame.verified, // Use the verified value from details
             magnet: updatedGame.magnet || null,
             direct: updatedGame.direct || {},
             lastChecked: updatedGame.lastChecked || new Date().toISOString(),
@@ -450,6 +447,7 @@ async function processTempGames(games, browser) {
                     Object.keys(newGame.direct).length > 0
                         ? "present"
                         : "absent",
+                verified: newGame.verified,
             });
         } else {
             log.warn("skipping save: incomplete game data", {
@@ -487,10 +485,14 @@ async function countItems() {
             (game) => !gamesLinks.has(normalizeLink(game.link))
         ).length;
 
-        log.data(`🔥 ${gamesCount} on games.json`);
+        log.data(
+            `🔥 ${gamesCount} on games.json and ${
+                gamesData.games.filter((g) => g.verified).length
+            } verified.`
+        );
         log.data(`✨ ${completeCount} on complete.json`);
         log.data(`📝 ${tempCount} on temp.json`);
-        log.data(`⚠️ ${uniqueToComplete} missing games.`);
+        log.data(`⚠️  ${uniqueToComplete} missing games.`);
 
         return { gamesCount, completeCount, tempCount, uniqueToComplete };
     } catch (err) {
@@ -543,7 +545,7 @@ async function main() {
             log.info(`Update completed. 🔎 Found ${updatedTempGames.length}`);
             finalGames = await processTempGames(updatedGames, browser);
         } else {
-            log.info("🪄 temp.json found with games, processing directly...");
+            log.info(`🪄  temp.json found with games, processing directly...`);
             finalGames = await processTempGames(games, browser);
         }
 

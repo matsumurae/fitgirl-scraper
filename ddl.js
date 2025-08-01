@@ -35,16 +35,15 @@ async function load() {
             game.verified = game.verified === true && game.size > 0;
             game.size = Math.round(10 * game.size) / 10;
         }
-        log.data("load", {
-            file,
-            games: filtered.length,
-            verified: filtered.filter((g) => g.verified).length,
-            withDirect: filtered.filter(
-                (g) => g.direct && Object.keys(g.direct).length > 0
-            ).length,
-            missingDirect: filtered.filter((g) => g.verified && !g.direct)
-                .length,
-        });
+        log.data(
+            `🌀 Loading JSON… There's ${filtered.length} with ${
+                filtered.filter(
+                    (g) => g.direct && Object.keys(g.direct).length > 0
+                ).length
+            } DDL links and ${
+                filtered.filter((g) => g.verified && !g.direct).length
+            } missing DDL.`
+        );
         return filtered;
     } catch (err) {
         log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
@@ -57,11 +56,11 @@ async function save(games) {
     try {
         const json = JSON.stringify(games, null, 2);
         fs.writeFileSync(file, json);
-        log.data("save", {
-            games: games.length,
-            verified: games.filter((g) => g.verified).length,
-            withDirect: games.filter((g) => g.direct).length,
-        });
+        log.data(
+            `Summary: ${games.length} games, only ${
+                games.filter((g) => g.direct).length
+            } has DDL.`
+        );
     } catch (err) {
         log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
     }
@@ -69,8 +68,9 @@ async function save(games) {
 
 async function fetchDirectLinks(game, browser, attempt = 1) {
     if (!game.verified || game.direct) return [game, false]; // Skip if not verified or already has direct links
-    const page = await browser.newPage();
+    let page = null; // Initialize page as null
     try {
+        page = await browser.newPage();
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
@@ -121,18 +121,10 @@ async function fetchDirectLinks(game, browser, attempt = 1) {
         // Create new game object with direct links
         const updatedGame = { ...game, direct: directLinks };
 
-        log.data("fetchDirectLinks", {
-            id: game.id,
-            game: game.name,
-            link: game.link,
-            direct: directLinks,
-        });
+        log.data(`Fetched links for ${game.name}. DDL: ${directLinks}`);
 
-        if (!directLinks && debug) {
-            log.debug("no direct links found", {
-                id: game.id,
-                game: game.name,
-            });
+        if (!directLinks) {
+            log.debug(`o direct links found for ${game.name}`);
         }
 
         await page.close();
@@ -144,15 +136,20 @@ async function fetchDirectLinks(game, browser, attempt = 1) {
             error: err.message,
             attempt,
         });
+        if (page) {
+            try {
+                await page.close();
+            } catch (closeErr) {
+                log.warn(`‼️ Error closing page. Error: ${closeErr.message}`);
+            }
+        }
         if (attempt < maxRetries) {
             log.info(
                 `Retrying ${game.link} (attempt ${attempt + 1}/${maxRetries})`
             );
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            await page.close();
             return fetchDirectLinks(game, browser, attempt + 1);
         }
-        await page.close();
         return [game, false];
     }
 }
@@ -182,10 +179,9 @@ async function main() {
                 await save(games); // Save after each successful update
             }
         }
-        log.data("update complete", {
-            totalGames: games.length,
-            updatedDirectLinks: updatedCount,
-        });
+        log.data(
+            `✅ Fetching complete! ${games.length} games updated, ${updatedCount} DDL links added.`
+        );
         if (updatedCount === 0) {
             log.info("No games needed direct link updates");
         }

@@ -14,11 +14,7 @@ async function load() {
     try {
         const data = JSON.parse(fs.readFileSync(file));
         const filtered = data.filter((d) => d.id);
-        log.data("load", {
-            file,
-            games: filtered.length,
-            verified: filtered.filter((g) => g.verified).length,
-        });
+        log.data(`Loading ${file}. There's ${filtered.length}.`);
         return filtered;
     } catch (error) {
         log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);

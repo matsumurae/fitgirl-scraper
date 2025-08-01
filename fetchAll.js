@@ -26,8 +26,9 @@ let cache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
 
 // Fetch HTML content of a URI using Puppeteer with retries
 async function html(uri, browser, attempt = 1) {
+    let page = null; // Initialize page as null
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         );
@@ -36,6 +37,10 @@ async function html(uri, browser, attempt = 1) {
         await page.close();
         return html;
     } catch (err) {
+        if (page) {
+            // Only call close if page was created
+            await page.close();
+        }
         if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
             log.error("Connection refused by server", { uri, attempt });
             if (attempt < maxRetries) {

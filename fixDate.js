@@ -10,7 +10,50 @@ const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
-const progressFile = "progress.json"; // New file to store progress
+const progressFile = "progress.json";
+
+// Fetch HTML content from a URI
+async function html(uri, browser, attempt = 1) {
+    let page = null;
+    try {
+        page = await browser.newPage();
+        await page.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        );
+        await page.goto(uri, { waitUntil: "networkidle2", timeout: timeout });
+        const content = await page.content();
+        await page.close();
+        return content;
+    } catch (err) {
+        if (page) {
+            try {
+                await page.close();
+            } catch (closeErr) {
+                log.warn(`‼️ Error closing page. Error: ${closeErr.message}`);
+            }
+        }
+        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
+            log.error("Connection refused by server", { uri, attempt });
+            if (attempt < maxRetries) {
+                log.info(
+                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
+                );
+                await new Promise((resolve) => setTimeout(resolve, retryDelay));
+                return html(uri, browser, attempt + 1);
+            }
+            log.error("All retries failed for", { uri });
+            return "";
+        }
+        log.warn("fetch error", { uri, attempt, error: err.message });
+        if (attempt < maxRetries) {
+            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+            return html(uri, browser, attempt + 1);
+        }
+        log.error("fetch failed after retries", { uri, error: err.message });
+        return "";
+    }
+}
 
 // Load progress from JSON
 async function loadProgress() {
@@ -24,10 +67,9 @@ async function loadProgress() {
         }
         const res = fs.readFileSync(progressFile);
         const data = JSON.parse(res);
-        log.data("loadProgress", {
-            progressFile,
-            lastCheckedIndex: data.lastCheckedIndex,
-        });
+        log.data(
+            `🌀 Loading progress… Last checked was ${data.lastCheckedIndex}`
+        );
         return data;
     } catch (err) {
         log.error(`⚠️ Failed to load ${progressFile}. Error: ${err.message}`);
@@ -40,13 +82,13 @@ async function saveProgress(index) {
     try {
         const json = JSON.stringify({ lastCheckedIndex: index }, null, 2);
         fs.writeFileSync(progressFile, json);
-        log.data("saveProgress", { progressFile, lastCheckedIndex: index });
+        log.data(`✅ Saving progress. Last check: ${index}`);
     } catch (err) {
         log.error(`⚠️ Save ${progressFile} failed. Error: ${err.message}`);
     }
 }
 
-// Load game database from JSON (unchanged)
+// Load game database from JSON
 async function load() {
     try {
         if (!fs.existsSync(file)) {
@@ -68,7 +110,7 @@ async function load() {
         const notChecked = filtered.filter(
             (g) => !g.lastChecked || g.lastChecked.split("T")[0] !== today
         ).length;
-        log.data("load", { file, games: filtered.length, notChecked });
+        log.data(`🔥 Starting… ${notChecked} of ${filtered.length}…`);
         return filtered;
     } catch (err) {
         log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
@@ -76,7 +118,7 @@ async function load() {
     }
 }
 
-// Save game database to JSON (unchanged)
+// Save game database to JSON
 async function save(games) {
     try {
         const json = JSON.stringify(games, null, 2);
@@ -85,11 +127,7 @@ async function save(games) {
         const notChecked = games.filter(
             (g) => !g.lastChecked || g.lastChecked.split("T")[0] !== today
         ).length;
-        log.data("save", {
-            games: games.length,
-            verified: games.filter((g) => g.verified).length,
-            notChecked,
-        });
+        log.data(`✨ Still ${notChecked} of ${games.length}…`);
     } catch (err) {
         log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
     }
@@ -136,21 +174,14 @@ async function checkTimestampsAgainstWebsite(
         for (let i = startFrom; i < games.length; i++) {
             const game = games[i];
 
-            // Skip games checked today
             if (game.lastChecked && game.lastChecked.split("T")[0] === today) {
-                // log.debug("skipping game, already checked today", {
-                //     id: game.id,
-                //     game: game.name,
-                //     lastChecked: game.lastChecked,
-                // });
                 skippedCount++;
-                await saveProgress(i + 1); // Update progress even for skipped games
+                await saveProgress(i + 1);
                 continue;
             }
 
             const jsonDate = game.date ? new Date(game.date) : null;
 
-            // Check if JSON date is valid
             if (!jsonDate || isNaN(jsonDate.getTime())) {
                 log.warn("invalid JSON date", {
                     id: game.id,
@@ -160,18 +191,23 @@ async function checkTimestampsAgainstWebsite(
                 invalidJsonDateCount++;
             }
 
-            // Scrape website for timestamp and data
-            const page = await browser.newPage();
+            let page = null;
             try {
-                await page.setUserAgent(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                );
-                await page.goto(game.link, {
-                    waitUntil: "networkidle2",
-                    timeout: timeout,
-                });
+                page = await browser.newPage();
+                const htmlContent = await html(game.link, browser);
+                if (!htmlContent) {
+                    log.warn("no content retrieved", {
+                        id: game.id,
+                        game: game.name,
+                        link: game.link,
+                    });
+                    noWebsiteDateCount++;
+                    await saveProgress(i + 1);
+                    continue;
+                }
 
-                // Get timestamp
+                await page.setContent(htmlContent);
+
                 const websiteDate = await page.evaluate(() => {
                     const dateEl = document.querySelector("time.entry-date");
                     return dateEl && dateEl.getAttribute("datetime")
@@ -186,8 +222,8 @@ async function checkTimestampsAgainstWebsite(
                         link: game.link,
                     });
                     noWebsiteDateCount++;
-                    await page.close();
-                    await saveProgress(i + 1); // Update progress
+                    if (page) await page.close();
+                    await saveProgress(i + 1);
                     continue;
                 }
 
@@ -199,12 +235,11 @@ async function checkTimestampsAgainstWebsite(
                         websiteDate,
                     });
                     noWebsiteDateCount++;
-                    await page.close();
-                    await saveProgress(i + 1); // Update progress
+                    if (page) await page.close();
+                    await saveProgress(i + 1);
                     continue;
                 }
 
-                // Compare timestamps
                 const jsonDateStr = jsonDate
                     ? jsonDate.toISOString().split(".")[0]
                     : null;
@@ -222,7 +257,6 @@ async function checkTimestampsAgainstWebsite(
                     });
                     mismatchCount++;
 
-                    // Update date regardless of other conditions
                     games[i] = {
                         ...game,
                         date: parsedWebsiteDate,
@@ -232,9 +266,8 @@ async function checkTimestampsAgainstWebsite(
                     log.info(
                         `${game.name} updated. ${parsedWebsiteDate} new date.`
                     );
-                    await save(games); // Save immediately after date update
+                    await save(games);
 
-                    // Scrape magnet and direct links
                     const websiteData = await page.evaluate(() => {
                         const directLinks = {};
                         const magnet =
@@ -250,12 +283,12 @@ async function checkTimestampsAgainstWebsite(
                             )
                         );
                         if (ddl) {
-                            const ul =
+                            const ULElement =
                                 Array.from(ddl.parentElement.children).find(
                                     (el) => el.tagName === "UL" && el !== ddl
                                 ) || null;
-                            if (ul) {
-                                const items = ul.querySelectorAll("li");
+                            if (ULElement) {
+                                const items = ULElement.querySelectorAll("li");
                                 for (const item of items) {
                                     const text = item.textContent.toLowerCase();
                                     let host = null;
@@ -288,7 +321,6 @@ async function checkTimestampsAgainstWebsite(
                         return { magnet, direct: directLinks };
                     });
 
-                    // Compare game data
                     dataChanges = {};
                     if (game.magnet !== websiteData.magnet) {
                         dataChanges.magnet = {
@@ -314,7 +346,7 @@ async function checkTimestampsAgainstWebsite(
                             changes: dataChanges,
                         });
                         games[i] = {
-                            ...games[i], // Keep the updated date
+                            ...games[i],
                             magnet: websiteData.magnet,
                             direct: websiteData.direct,
                         };
@@ -322,10 +354,9 @@ async function checkTimestampsAgainstWebsite(
                             magnet: websiteData.magnet,
                             direct: websiteData.direct,
                         });
-                        await save(games); // Save again if data changes
+                        await save(games);
                     }
 
-                    // Additional fixes if requested
                     if (fix) {
                         log.info(`${game.name} fixed`);
                     }
@@ -343,15 +374,24 @@ async function checkTimestampsAgainstWebsite(
                     matchCount++;
                 }
 
-                await page.close();
-                await saveProgress(i + 1); // Update progress after successful processing
+                if (page) await page.close();
+                await saveProgress(i + 1);
             } catch (err) {
-                log.warn("error scraping website", {
+                log.warn("error processing website", {
                     id: game.id,
                     game: game.name,
                     error: err.message,
                     attempt,
                 });
+                if (page) {
+                    try {
+                        await page.close();
+                    } catch (closeErr) {
+                        log.warn(
+                            `‼️ Error closing page. Error: ${closeErr.message}`
+                        );
+                    }
+                }
                 if (attempt < maxRetries) {
                     log.info(
                         `Retrying ${game.link} (attempt ${
@@ -361,20 +401,17 @@ async function checkTimestampsAgainstWebsite(
                     await new Promise((resolve) =>
                         setTimeout(resolve, retryDelay)
                     );
-                    await page.close();
                     return await checkTimestampsAgainstWebsite(
                         fix,
                         attempt + 1,
                         i
-                    ); // Retry from the current index
+                    );
                 }
-                await page.close();
-                await saveProgress(i + 1); // Update progress even on failure
+                await saveProgress(i + 1);
                 continue;
             }
         }
 
-        // Reset progress when all games are processed
         await saveProgress(0);
         log.info("All games processed, progress reset", {
             totalGames: games.length,
@@ -400,7 +437,6 @@ async function checkTimestampsAgainstWebsite(
     }
 }
 
-// Main function to check timestamps and update game data
 async function main() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
@@ -441,4 +477,5 @@ if (require.main === module) {
     exports.loadProgress = loadProgress;
     exports.saveProgress = saveProgress;
     exports.checkTimestampsAgainstWebsite = checkTimestampsAgainstWebsite;
+    exports.html = html;
 }
