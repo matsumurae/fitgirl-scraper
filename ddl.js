@@ -7,77 +7,33 @@ const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
+const { configurePage, fetchHtml, saveFile, loadFile } = require("./utils");
 
 // Add stealth plugin to Puppeteer
 puppeteer.use(StealthPlugin());
 
 // Configurable
-const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
-const timeout = parseInt(process.env.TIMEOUT);
-
-// Load game database from JSON
-async function load() {
-    try {
-        if (!fs.existsSync(file)) {
-            log.warn("load: file does not exist, creating empty file", {
-                file,
-            });
-            fs.writeFileSync(file, JSON.stringify([]));
-            return [];
-        }
-        const res = fs.readFileSync(file);
-        const data = JSON.parse(res);
-        const filtered = data.filter((d) => d.id);
-        for (const game of filtered) {
-            game.date = new Date(game.date);
-            game.verified = game.verified === true && game.size > 0;
-            game.size = Math.round(10 * game.size) / 10;
-        }
-        log.data(
-            `🌀 Loading JSON… There's ${filtered.length} with ${
-                filtered.filter(
-                    (g) => g.direct && Object.keys(g.direct).length > 0
-                ).length
-            } DDL links and ${
-                filtered.filter((g) => g.verified && !g.direct).length
-            } missing DDL.`
-        );
-        return filtered;
-    } catch (err) {
-        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
-        return [];
-    }
-}
-
-// Save game database to JSON
-async function save(games) {
-    try {
-        const json = JSON.stringify(games, null, 2);
-        fs.writeFileSync(file, json);
-        log.data(
-            `Summary: ${games.length} games, only ${
-                games.filter((g) => g.direct).length
-            } has DDL.`
-        );
-    } catch (err) {
-        log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
-    }
-}
 
 async function fetchDirectLinks(game, browser, attempt = 1) {
     if (!game.verified || game.direct) return [game, false]; // Skip if not verified or already has direct links
-    let page = null; // Initialize page as null
+    let page = null;
     try {
         page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await page.goto(game.link, {
-            waitUntil: "networkidle2",
-            timeout: timeout,
-        });
+        await configurePage(page);
+        const htmlContent = await fetchHtml(game.link, browser, attempt);
+        if (!htmlContent) {
+            log.warn("no content retrieved", {
+                id: game.id,
+                game: game.name,
+                link: game.link,
+            });
+            await page.close();
+            return [game, false];
+        }
+
+        await page.setContent(htmlContent);
 
         // Get direct links without modifying game directly
         const directLinks = await page.evaluate(() => {
@@ -121,10 +77,14 @@ async function fetchDirectLinks(game, browser, attempt = 1) {
         // Create new game object with direct links
         const updatedGame = { ...game, direct: directLinks };
 
-        log.data(`Fetched links for ${game.name}. DDL: ${directLinks}`);
+        log.data(
+            `Fetched links for ${game.name}. DDL: ${JSON.stringify(
+                directLinks
+            )}`
+        );
 
         if (!directLinks) {
-            log.debug(`o direct links found for ${game.name}`);
+            log.debug(`No direct links found for ${game.name}`);
         }
 
         await page.close();
@@ -169,21 +129,21 @@ async function main() {
     });
 
     try {
-        const games = await load();
+        const games = await loadFile();
         let updatedCount = 0;
         for (let i = 0; i < games.length; i++) {
             const [game, updated] = await fetchDirectLinks(games[i], browser);
             games[i] = game;
             if (updated) {
                 updatedCount++;
-                await save(games); // Save after each successful update
+                await saveFile(games);
             }
         }
         log.data(
             `✅ Fetching complete! ${games.length} games updated, ${updatedCount} DDL links added.`
         );
         if (updatedCount === 0) {
-            log.info("No games needed direct link updates");
+            log.info("🎉 Congrats! No games needed direct link updates!");
         }
     } finally {
         await browser.close();

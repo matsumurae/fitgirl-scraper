@@ -3,36 +3,26 @@
 // Usage: node run find <search-term>
 require("dotenv").config();
 
-const fs = require("fs");
 const process = require("process");
 const log = require("@vladmandic/pilogger");
+const { loadFile } = require("./utils");
 
 const maxResults = 40;
 const file = process.env.FILE;
-
-async function load() {
-    try {
-        const data = JSON.parse(fs.readFileSync(file));
-        const filtered = data.filter((d) => d.id);
-        log.data(`Loading ${file}. There's ${filtered.length}.`);
-        return filtered;
-    } catch (error) {
-        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
-        return [];
-    }
-}
 
 async function main() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
 
-    const games = (await load()).map(({ name, size, date, tags, link }) => ({
-        name,
-        size,
-        date,
-        tags: tags?.join(" ") || "",
-        link,
-    }));
+    const games = (await loadFile(file)).map(
+        ({ name, size, date, tags, link }) => ({
+            name,
+            size,
+            date,
+            tags: tags?.join(" ") || "",
+            link,
+        })
+    );
 
     const searchTerm = process.argv[2]?.toLowerCase();
     if (searchTerm) {

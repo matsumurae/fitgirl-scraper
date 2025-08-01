@@ -7,6 +7,7 @@
         "compare": "node --no-warnings compare.js",
         "count": "node --no-warnings compare.js --count-items",
         "find": "node --no-warnings find.js",
+        "ddl": "node --no-warnings ddl.js",
         "date": "node --no-warnings fixDate.js",
         "fetch": "node --no-warnings fetchAll.js"
     },

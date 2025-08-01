@@ -1,59 +1,17 @@
+// Check if dates changed on website and update magnet and DDL links
 require("dotenv").config();
+
 const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
+const { fetchHtml, loadFile, saveFile } = require("./utils");
 
 puppeteer.use(StealthPlugin());
 
-const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
-const timeout = parseInt(process.env.TIMEOUT);
 const progressFile = "progress.json";
-
-// Fetch HTML content from a URI
-async function html(uri, browser, attempt = 1) {
-    let page = null;
-    try {
-        page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await page.goto(uri, { waitUntil: "networkidle2", timeout: timeout });
-        const content = await page.content();
-        await page.close();
-        return content;
-    } catch (err) {
-        if (page) {
-            try {
-                await page.close();
-            } catch (closeErr) {
-                log.warn(`‼️ Error closing page. Error: ${closeErr.message}`);
-            }
-        }
-        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
-            log.error("Connection refused by server", { uri, attempt });
-            if (attempt < maxRetries) {
-                log.info(
-                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
-                );
-                await new Promise((resolve) => setTimeout(resolve, retryDelay));
-                return html(uri, browser, attempt + 1);
-            }
-            log.error("All retries failed for", { uri });
-            return "";
-        }
-        log.warn("fetch error", { uri, attempt, error: err.message });
-        if (attempt < maxRetries) {
-            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
-            await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            return html(uri, browser, attempt + 1);
-        }
-        log.error("fetch failed after retries", { uri, error: err.message });
-        return "";
-    }
-}
 
 // Load progress from JSON
 async function loadProgress() {
@@ -88,58 +46,13 @@ async function saveProgress(index) {
     }
 }
 
-// Load game database from JSON
-async function load() {
-    try {
-        if (!fs.existsSync(file)) {
-            log.warn("load: file does not exist, creating empty file", {
-                file,
-            });
-            fs.writeFileSync(file, JSON.stringify([]));
-            return [];
-        }
-        const res = fs.readFileSync(file);
-        const data = JSON.parse(res);
-        const filtered = data.filter((d) => d.id);
-        const today = new Date().toISOString().split("T")[0];
-        for (const game of filtered) {
-            game.date = new Date(game.date);
-            game.verified = game.verified === true && game.size > 0;
-            game.size = Math.round(10 * game.size) / 10;
-        }
-        const notChecked = filtered.filter(
-            (g) => !g.lastChecked || g.lastChecked.split("T")[0] !== today
-        ).length;
-        log.data(`🔥 Starting… ${notChecked} of ${filtered.length}…`);
-        return filtered;
-    } catch (err) {
-        log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
-        return [];
-    }
-}
-
-// Save game database to JSON
-async function save(games) {
-    try {
-        const json = JSON.stringify(games, null, 2);
-        fs.writeFileSync(file, json);
-        const today = new Date().toISOString().split("T")[0];
-        const notChecked = games.filter(
-            (g) => !g.lastChecked || g.lastChecked.split("T")[0] !== today
-        ).length;
-        log.data(`✨ Still ${notChecked} of ${games.length}…`);
-    } catch (err) {
-        log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
-    }
-}
-
 async function checkTimestampsAgainstWebsite(
     fix = false,
     attempt = 1,
     startIndex = null
 ) {
     log.headerJson();
-    const games = await load();
+    const games = await loadFile();
     const progress = await loadProgress();
     let startFrom =
         startIndex !== null ? startIndex : progress.lastCheckedIndex;
@@ -183,18 +96,14 @@ async function checkTimestampsAgainstWebsite(
             const jsonDate = game.date ? new Date(game.date) : null;
 
             if (!jsonDate || isNaN(jsonDate.getTime())) {
-                log.warn("invalid JSON date", {
-                    id: game.id,
-                    game: game.name,
-                    jsonDate: game.date,
-                });
+                log.warn(`invalid JSON date on ${game.name}`);
                 invalidJsonDateCount++;
             }
 
             let page = null;
             try {
                 page = await browser.newPage();
-                const htmlContent = await html(game.link, browser);
+                const htmlContent = await fetchHtml(game.link, browser);
                 if (!htmlContent) {
                     log.warn("no content retrieved", {
                         id: game.id,
@@ -216,11 +125,7 @@ async function checkTimestampsAgainstWebsite(
                 });
 
                 if (!websiteDate) {
-                    log.warn("no date found on website", {
-                        id: game.id,
-                        game: game.name,
-                        link: game.link,
-                    });
+                    log.warn(`no date found on website for ${game.name}`);
                     noWebsiteDateCount++;
                     if (page) await page.close();
                     await saveProgress(i + 1);
@@ -266,7 +171,7 @@ async function checkTimestampsAgainstWebsite(
                     log.info(
                         `${game.name} updated. ${parsedWebsiteDate} new date.`
                     );
-                    await save(games);
+                    await saveFile(games);
 
                     const websiteData = await page.evaluate(() => {
                         const directLinks = {};
@@ -354,7 +259,7 @@ async function checkTimestampsAgainstWebsite(
                             magnet: websiteData.magnet,
                             direct: websiteData.direct,
                         });
-                        await save(games);
+                        await saveFile(games);
                     }
 
                     if (fix) {
@@ -370,7 +275,7 @@ async function checkTimestampsAgainstWebsite(
                         ...game,
                         lastChecked: new Date().toISOString(),
                     };
-                    await save(games);
+                    await saveFile(games);
                     matchCount++;
                 }
 
@@ -472,10 +377,10 @@ if (require.main === module) {
         main();
     }
 } else {
-    exports.load = load;
-    exports.save = save;
+    exports.loadFile = loadFile;
+    exports.saveFile = saveFile;
     exports.loadProgress = loadProgress;
     exports.saveProgress = saveProgress;
     exports.checkTimestampsAgainstWebsite = checkTimestampsAgainstWebsite;
-    exports.html = html;
+    exports.fetchHtml = fetchHtml;
 }

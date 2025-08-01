@@ -4,6 +4,7 @@ const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
 const yargs = require("yargs");
+const { configurePage, fetchHtml, saveFile } = require("./utils");
 
 // Add stealth plugin to Puppeteer
 puppeteer.use(StealthPlugin());
@@ -24,53 +25,11 @@ const timeout = parseInt(process.env.TIMEOUT);
 const cacheFile = "cache.json";
 let cache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
 
-// Fetch HTML content of a URI using Puppeteer with retries
-async function html(uri, browser, attempt = 1) {
-    let page = null; // Initialize page as null
-    try {
-        page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await page.goto(uri, { waitUntil: "networkidle2", timeout: timeout });
-        const html = await page.content();
-        await page.close();
-        return html;
-    } catch (err) {
-        if (page) {
-            // Only call close if page was created
-            await page.close();
-        }
-        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
-            log.error("Connection refused by server", { uri, attempt });
-            if (attempt < maxRetries) {
-                log.info(
-                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
-                );
-                await new Promise((resolve) => setTimeout(resolve, retryDelay));
-                return html(uri, browser, attempt + 1);
-            }
-            log.error("All retries failed for", { uri });
-            return "";
-        }
-        log.warn("fetch error", { uri, attempt, error: err.message });
-        if (attempt < maxRetries) {
-            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
-            await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            return html(uri, browser, attempt + 1);
-        }
-        log.error("fetch failed after retries", { uri, error: err.message });
-        return "";
-    }
-}
-
 // Update cache with new page count
 async function updateCachePageCount(browser) {
     try {
         const page = await browser.newPage();
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
+        await configurePage(page);
         await page.goto(fullUrl, {
             waitUntil: "networkidle2",
             timeout: timeout,
@@ -102,28 +61,6 @@ async function updateCachePageCount(browser) {
     } catch (err) {
         log.error("Failed to update cache page count", { error: err.message });
         return cache.pages;
-    }
-}
-
-// Save a single game to complete.json
-async function saveGame(game, fileName) {
-    try {
-        let games = [];
-        if (fs.existsSync(fileName)) {
-            const data = fs.readFileSync(fileName, "utf8");
-            games = JSON.parse(data);
-        }
-
-        // Check for duplicates using the 'link' property
-        if (!games.find((g) => g.link === game.link)) {
-            games.push(game);
-            fs.writeFileSync(fileName, JSON.stringify(games, null, 2));
-            log.info(`🔥 Saved ${game.name} to ${fileName}`);
-        } else {
-            log.debug(`${game.name} game already exists. Skipping…`);
-        }
-    } catch (err) {
-        log.error(`Save game failed. Error: ${err.message}`);
     }
 }
 
@@ -184,7 +121,7 @@ async function scrape() {
         // Iterate through all pages starting from startPage
         for (let pageNum = startPage; pageNum <= cachedNumPages; pageNum++) {
             const pageUrl = `${fullUrl}/?lcp_page0=${pageNum}#lcp_instance_0`;
-            const content = await html(pageUrl, browser);
+            const content = await fetchHtml(pageUrl, browser);
             if (!content) {
                 log.error("No content fetched for page", { pageNum });
                 continue;
@@ -192,9 +129,7 @@ async function scrape() {
 
             const page = await browser.newPage();
             try {
-                await page.setUserAgent(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                );
+                await configurePage(page);
                 await page.goto(pageUrl, {
                     waitUntil: "networkidle2",
                     timeout: timeout,
@@ -226,8 +161,10 @@ async function scrape() {
                         link,
                         page: pageNum,
                     };
-                    log.info(`🔎 Found new game: ${game.name}`);
-                    await saveGame(game, "complete.json");
+                    log.info(`🔎 Found game: ${game.name}`);
+                    await saveFile(game, "complete.json", {
+                        isSingleGame: true,
+                    });
                 }
 
                 await saveState(pageNum + 1);
