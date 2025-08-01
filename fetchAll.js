@@ -1,5 +1,3 @@
-// Scrape all My Repacks A-Z page for games and save to JSON
-// Used to update the list of games on the site
 require("dotenv").config();
 const fs = require("fs");
 const puppeteer = require("puppeteer-extra");
@@ -23,8 +21,8 @@ const fullUrl = `${baseUrl}all-my-repacks-a-z`;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
-const cache = JSON.parse(fs.readFileSync("cache.json", "utf8"));
-const cachedNumPages = cache.pages;
+const cacheFile = "cache.json";
+let cache = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
 
 // Fetch HTML content of a URI using Puppeteer with retries
 async function html(uri, browser, attempt = 1) {
@@ -61,6 +59,48 @@ async function html(uri, browser, attempt = 1) {
     }
 }
 
+// Update cache with new page count
+async function updateCachePageCount(browser) {
+    try {
+        const page = await browser.newPage();
+        await page.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        );
+        await page.goto(fullUrl, {
+            waitUntil: "networkidle2",
+            timeout: timeout,
+        });
+
+        const lastPageNum = await page.evaluate(() => {
+            const paginator = document.querySelector(".lcp_paginator");
+            if (!paginator) return null;
+            const links = paginator.querySelectorAll("a");
+            if (links.length < 2) return 1;
+            // Get penultimate link (last number before "Next page")
+            const penultimateLink = links[links.length - 2];
+            return parseInt(penultimateLink.getAttribute("title")) || 1;
+        });
+
+        if (lastPageNum && lastPageNum !== cache.pages) {
+            cache.pages = lastPageNum;
+            cache.lastChecked = new Date().toISOString();
+            fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+            log.info("Updated cache", {
+                pages: lastPageNum,
+                lastChecked: cache.lastChecked,
+            });
+        } else if (!lastPageNum) {
+            log.warn("Could not determine page count");
+        }
+
+        await page.close();
+        return lastPageNum || cache.pages;
+    } catch (err) {
+        log.error("Failed to update cache page count", { error: err.message });
+        return cache.pages;
+    }
+}
+
 // Save a single game to complete.json
 async function saveGame(game, fileName) {
     try {
@@ -70,6 +110,7 @@ async function saveGame(game, fileName) {
             games = JSON.parse(data);
         }
 
+        // Check for duplicates using the 'link' property
         if (!games.find((g) => g.link === game.link)) {
             games.push(game);
             fs.writeFileSync(fileName, JSON.stringify(games, null, 2));
@@ -136,6 +177,9 @@ async function scrape() {
     });
 
     try {
+        // Update cache page count
+        const cachedNumPages = await updateCachePageCount(browser);
+
         let startPage = loadState();
         let id = 1;
         let games = [];
