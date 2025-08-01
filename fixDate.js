@@ -380,17 +380,9 @@ async function checkTimestampsAgainstWebsite(
             totalGames: games.length,
         });
 
-        log.data("summary", {
-            totalGames: games.length,
-            matchedDates: matchCount,
-            mismatchedDates: mismatchCount,
-            invalidJsonDates: invalidJsonDateCount,
-            noWebsiteDates: noWebsiteDateCount,
-            fixedGames: fixedCount,
-            gamesWithDataChanges: dataChangesCount,
-            skippedGames: skippedCount,
-            startedFromIndex: startFrom,
-        });
+        log.data(
+            `From ${games.length}: ${mismatchCount} were wrong. ${invalidJsonDateCount} had invalid JSON date. ${noWebsiteDateCount} doesn't have date on website. ${fixedCount} were fixed. ${skippedCount} were skipped.`
+        );
 
         return {
             total: games.length,

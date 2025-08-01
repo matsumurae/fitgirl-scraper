@@ -1,7 +1,6 @@
 // Compare script for FitGirl repacks
 // This script compares the current game database with a complete list of games,
 // updates the database with new games, and fetches details for each game using Puppeteer.
-// It also handles retries for network errors and logs the process.
 require("dotenv").config();
 
 const fs = require("fs");
@@ -9,17 +8,23 @@ const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
 
-// Add stealth plugin to Puppeteer
 puppeteer.use(StealthPlugin());
 
-// Configurable
 const file = process.env.FILE;
 const cacheFile = "cache.json";
+const tempFile = "temp.json";
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
 
-// Load cache from cache.json
+// Normalize links for comparison to avoid false negatives
+function normalizeLink(link) {
+    return link
+        .toLowerCase()
+        .replace(/\/$/, "") // Remove trailing slash
+        .replace(/^https?:\/\//, ""); // Remove protocol
+}
+
 async function loadCache() {
     try {
         if (!fs.existsSync(cacheFile)) {
@@ -29,43 +34,34 @@ async function loadCache() {
             const defaultCache = {
                 pages: 0,
                 lastChecked: new Date().toISOString(),
-                lastId: 0,
             };
             fs.writeFileSync(cacheFile, JSON.stringify(defaultCache, null, 2));
             return defaultCache;
         }
         const res = fs.readFileSync(cacheFile);
         const cache = JSON.parse(res);
-        log.data("loadCache", {
-            file: cacheFile,
-            pages: cache.pages,
-            lastId: cache.lastId,
-            lastChecked: cache.lastChecked,
-        });
+        log.data(
+            `Cache loaded. ${new Date(
+                cache.lastChecked
+            ).toLocaleString()} last checked.`
+        );
         return cache;
     } catch (err) {
         log.error(`⚠️ Failed to load ${cacheFile}. Error: ${err.message}`);
-        return { pages: 0, lastChecked: new Date().toISOString(), lastId: 0 };
+        return { pages: 0, lastChecked: new Date().toISOString() };
     }
 }
 
-// Save cache to cache.json
 async function saveCache(cache) {
     try {
         const json = JSON.stringify(cache, null, 2);
         fs.writeFileSync(cacheFile, json);
-        log.data("saveCache", {
-            file: cacheFile,
-            pages: cache.pages,
-            lastId: cache.lastId,
-            lastChecked: cache.lastChecked,
-        });
+        log.data("Saved cache!");
     } catch (err) {
         log.error(`⚠️ Failed to load ${cacheFile}. Error: ${err.message}`);
     }
 }
 
-// Fetch HTML content of a URI using Puppeteer with retries
 async function fetchHtml(uri, browser, attempt = 1) {
     try {
         const page = await browser.newPage();
@@ -100,7 +96,6 @@ async function fetchHtml(uri, browser, attempt = 1) {
     }
 }
 
-// Fetch details for a given game
 async function details(game, browser) {
     try {
         const content = await fetchHtml(game.link, browser);
@@ -121,14 +116,12 @@ async function details(game, browser) {
             timeout: timeout,
         });
 
-        // Extract date
         const date = await page.evaluate(() => {
             const dateEl = document.querySelector("time.entry-date");
             return dateEl?.getAttribute("datetime") || null;
         });
         game.date = date ? new Date(date) : new Date();
 
-        // Extract content
         const contentText = await page.evaluate(() => {
             const content = document.querySelector(
                 ".entry-content, .post-content, article, .content"
@@ -146,7 +139,6 @@ async function details(game, browser) {
             return [game, false];
         }
 
-        // Process content lines
         for (const line of contentText) {
             if (line.match(/genres|tags/i))
                 game.tags = line
@@ -169,7 +161,6 @@ async function details(game, browser) {
                     .trim();
         }
 
-        // Parse sizes
         const packed = game.packed
             ? Number(
                   game.packed.replace(",", ".").match(/(\d+(\.\d+)?)/)?.[0] || 0
@@ -184,7 +175,6 @@ async function details(game, browser) {
         game.size = Math.max(packed, original);
         if (game?.size > 0 && game.original?.includes("MB")) game.size /= 1024;
 
-        // Extract direct download links
         game.direct = await page.evaluate(() => {
             const directLinks = {};
             const ddl = Array.from(document.querySelectorAll("h3")).find((el) =>
@@ -223,26 +213,21 @@ async function details(game, browser) {
             return directLinks;
         });
 
-        // Find magnet link
         const magnet = await page.evaluate(() => {
             const href = document.querySelector('a[href*="magnet"]');
             return href ? href.getAttribute("href") : null;
         });
         if (magnet) game.magnet = magnet;
 
-        // Set verified
         game.verified =
             game.size > 0 && game.magnet && Object.keys(game.direct).length > 0;
         game.lastChecked = new Date().toISOString();
 
-        log.data("details", {
-            id: game.id,
-            verified: game.verified,
-            game: game.name,
+        log.data(`${game.name} added.`, {
             link: game.link,
             size: game.size,
             direct: game.direct,
-            lastChecked: game.lastChecked,
+            magnet: game.magnet,
         });
 
         await page.close();
@@ -258,7 +243,6 @@ async function details(game, browser) {
     }
 }
 
-// Load game database from JSON
 async function load() {
     try {
         if (!fs.existsSync(file)) {
@@ -270,17 +254,18 @@ async function load() {
         const res = fs.readFileSync(file);
         const data = JSON.parse(res);
         const filtered = data.filter((d) => d.link);
+        log.info(`Loaded ${filtered.length} games from ${file}`, { file });
         for (const game of filtered) {
             game.date = new Date(game.date);
             game.verified = game.verified === true && game.size > 0;
             game.size = Math.round(10 * game.size) / 10;
             game.lastChecked = game.lastChecked || new Date().toISOString();
         }
-        log.data("load", {
-            file,
-            games: filtered.length,
-            verified: filtered.filter((g) => g.verified).length,
-        });
+        log.data(
+            `Reading ${file}… It has ${filtered.length} and ${
+                filtered.filter((g) => g.verified).length
+            } verified.`
+        );
         return { games: filtered };
     } catch (err) {
         log.error(`⚠️ Failed to load ${file}. Error: ${err.message}`);
@@ -288,30 +273,25 @@ async function load() {
     }
 }
 
-// Save game database to JSON
 async function save(games) {
     try {
         const json = JSON.stringify(games, null, 2);
         fs.writeFileSync(file, json);
-        log.data("save", {
-            games: games.length,
-            verified: games.filter((g) => g.verified).length,
-            withDirect: games.filter(
-                (g) => g.direct && Object.keys(g.direct).length > 0
-            ).length,
-            missingDirect: games.filter((g) => g.verified && !g.direct).length,
-        });
+        log.data(
+            `${games.length} saved! ${
+                games.filter((g) => g.verified).length
+            } verified.`
+        );
     } catch (err) {
         log.error(`⚠️ Save ${file} failed. Error: ${err.message}`);
     }
 }
 
-// Load complete database from complete.json
 async function loadComplete() {
     const completeFile = "complete.json";
     try {
         if (!fs.existsSync(completeFile)) {
-            log.warn("⚠️  loadComplete: file does not exist", { completeFile });
+            log.warn("⚠️ loadComplete: file does not exist", { completeFile });
             log.warn("💡 Hint: Run 'npm run fetch' to get the data.");
             return [];
         }
@@ -332,76 +312,74 @@ async function loadComplete() {
     }
 }
 
-// Update list of games by comparing with complete.json
-async function update(games, cache, browser, attempt = 1) {
+async function loadTemp() {
+    try {
+        if (!fs.existsSync(tempFile)) {
+            fs.writeFileSync(tempFile, JSON.stringify([]));
+            return [];
+        }
+        const res = fs.readFileSync(tempFile);
+        const data = JSON.parse(res);
+        return data;
+    } catch (err) {
+        log.error(`⚠️ Failed to load ${tempFile}. Error: ${err.message}`);
+        return [];
+    }
+}
+
+async function saveTemp(games) {
+    try {
+        const json = JSON.stringify(games, null, 2);
+        fs.writeFileSync(tempFile, json);
+        log.data("saveTemp", { file: tempFile, games: games.length });
+        log.data(`Checked games. Saved ${games.length}`);
+    } catch (err) {
+        log.error(`⚠️ Save ${tempFile} failed. Error: ${err.message}`);
+    }
+}
+
+async function deleteTemp() {
+    try {
+        if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile);
+            log.info(`Deleted ${tempFile}`);
+        }
+    } catch (err) {
+        log.error(`⚠️ Failed to delete ${tempFile}. Error: ${err.message}`);
+    }
+}
+
+async function update(games, cache, browser) {
     const completeGames = await loadComplete();
     let newGamesCount = 0;
-    let currentId = cache.lastId;
+    let tempGames = await loadTemp();
 
-    // Compare games with complete.json based on link
+    log.debug(
+        "Games links:",
+        games.map((g) => g.link)
+    );
+    log.debug(
+        "Complete games links:",
+        completeGames.map((g) => g.link)
+    );
+
     for (const completeGame of completeGames) {
-        if (!games.find((game) => game.link === completeGame.link)) {
-            // Initialize newGame with minimal data from complete.json
+        if (
+            !games.find(
+                (game) =>
+                    normalizeLink(game.link) ===
+                    normalizeLink(completeGame.link)
+            )
+        ) {
             let newGame = {
-                id: ++currentId,
+                id: games.length + tempGames.length + newGamesCount + 1,
                 name: completeGame.name,
                 link: completeGame.link,
                 lastChecked: new Date().toISOString(),
             };
             log.info(`🔎 new game ${newGame.name} found from complete.json`);
-
-            // Scrape details from the game's page
-            log.info(`🔎 scraping details for ${newGame.name} game`);
-            const [updatedGame, verified] = await details(newGame, browser);
-            newGame = {
-                id: updatedGame.id,
-                name: updatedGame.name,
-                link: updatedGame.link,
-                date: updatedGame.date,
-                tags: updatedGame.tags || [],
-                creator: updatedGame.creator || [],
-                original: updatedGame.original || "",
-                packed: updatedGame.packed || "",
-                size: updatedGame.size || 0,
-                verified: updatedGame.verified || false,
-                magnet: updatedGame.magnet || null,
-                direct: updatedGame.direct || {},
-                lastChecked:
-                    updatedGame.lastChecked || new Date().toISOString(),
-            };
-
-            // Only save if the game has valid data
-            if (
-                newGame.verified ||
-                newGame.size > 0 ||
-                newGame.magnet ||
-                Object.keys(newGame.direct).length > 0
-            ) {
-                games.push(newGame);
-                cache.lastId = currentId; // Update lastId in cache
-                await save(games); // Save to games.json
-                await saveCache(cache); // Save updated cache
-                newGamesCount++;
-                log.info(`${newGame.name} game saved.`, {
-                    link: newGame.link,
-                    size: newGame.size,
-                    date: newGame.date.toISOString(),
-                    tags: newGame.tags,
-                    creator: newGame.creator,
-                    magnet: newGame.magnet ? "present" : "absent",
-                    direct:
-                        Object.keys(newGame.direct).length > 0
-                            ? "present"
-                            : "absent",
-                });
-            } else {
-                log.warn("skipping save: incomplete game data", {
-                    name: newGame.name,
-                    link: newGame.link,
-                    verified: newGame.verified,
-                    size: newGame.size,
-                });
-            }
+            tempGames.push(newGame);
+            newGamesCount++;
         } else {
             log.debug("game already exists", {
                 name: completeGame.name,
@@ -410,49 +388,137 @@ async function update(games, cache, browser, attempt = 1) {
         }
     }
 
-    log.data("update summary", {
-        existing: games.length - newGamesCount,
-        new: newGamesCount,
-        total: games.length,
-        todo: games.filter((g) => !g.verified).length,
-    });
+    if (newGamesCount > 0) {
+        await saveTemp(tempGames);
+        log.info(`Saved ${newGamesCount} new games to ${tempFile}`);
+    }
+
+    log.data(
+        `${
+            games.length
+        } updated. ${newGamesCount} are new, that makes a total of ${
+            games.length + newGamesCount
+        }. You're missing ${tempGames.length}`
+    );
+
+    return { games, tempGames };
+}
+
+async function processTempGames(games, browser) {
+    let tempGames = await loadTemp();
+    if (tempGames.length === 0) {
+        log.info("No games to process in temp.json");
+        await deleteTemp();
+        return games;
+    }
+
+    log.info(`Processing ${tempGames.length} games from temp.json`);
+    for (let i = 0; i < tempGames.length; i++) {
+        log.info(`🔎 scraping details for ${tempGames[i].name} game`);
+        const [updatedGame, verified] = await details(tempGames[i], browser);
+        const newGame = {
+            id: updatedGame.id,
+            name: updatedGame.name,
+            link: updatedGame.link,
+            date: updatedGame.date,
+            tags: updatedGame.tags || [],
+            creator: updatedGame.creator || [],
+            original: updatedGame.original || "",
+            packed: updatedGame.packed || "",
+            size: updatedGame.size || 0,
+            verified: updatedGame.verified || false,
+            magnet: updatedGame.magnet || null,
+            direct: updatedGame.direct || {},
+            lastChecked: updatedGame.lastChecked || new Date().toISOString(),
+        };
+
+        if (
+            newGame.verified ||
+            newGame.size > 0 ||
+            newGame.magnet ||
+            Object.keys(newGame.direct).length > 0
+        ) {
+            games.push(newGame);
+            await save(games);
+            log.info(`${newGame.name} game saved.`, {
+                link: newGame.link,
+                size: newGame.size,
+                date: newGame.date.toISOString(),
+                tags: newGame.tags,
+                creator: newGame.creator,
+                magnet: newGame.magnet ? "present" : "absent",
+                direct:
+                    Object.keys(newGame.direct).length > 0
+                        ? "present"
+                        : "absent",
+            });
+        } else {
+            log.warn("skipping save: incomplete game data", {
+                name: newGame.name,
+                link: newGame.link,
+                verified: newGame.verified,
+                size: newGame.size,
+            });
+        }
+
+        tempGames.splice(i, 1);
+        i--;
+        await saveTemp(tempGames);
+    }
+
+    if (tempGames.length === 0) {
+        await deleteTemp();
+    }
 
     return games;
 }
 
-// Count items in compare.json and games.json
 async function countItems() {
     try {
-        // Load games.json (process.env.FILE)
         const gamesData = await load();
         const gamesCount = gamesData.games.length;
-
-        // Load compare.json
         const completeGames = await loadComplete();
         const completeCount = completeGames.length;
-
-        // Calculate items in compare.json that are not in games.json
-        const gamesLinks = new Set(gamesData.games.map((game) => game.link));
+        const tempGames = await loadTemp();
+        const tempCount = tempGames.length;
+        const gamesLinks = new Set(
+            gamesData.games.map((game) => normalizeLink(game.link))
+        );
         const uniqueToComplete = completeGames.filter(
-            (game) => !gamesLinks.has(game.link)
+            (game) => !gamesLinks.has(normalizeLink(game.link))
         ).length;
 
-        // Log the counts and difference
         log.data(`🔥 ${gamesCount} on games.json`);
         log.data(`✨ ${completeCount} on complete.json`);
+        log.data(`📝 ${tempCount} on temp.json`);
         log.data(`⚠️ ${uniqueToComplete} missing games.`);
 
-        return { gamesCount, completeCount, uniqueToComplete };
+        return { gamesCount, completeCount, tempCount, uniqueToComplete };
     } catch (err) {
         log.error(`⚠️ Count items failed. Error: ${err.message}`);
-        return { gamesCount: 0, completeCount: 0, uniqueToComplete: 0 };
+        return {
+            gamesCount: 0,
+            completeCount: 0,
+            tempCount: 0,
+            uniqueToComplete: 0,
+        };
     }
 }
 
-// Main function
 async function main() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
+
+    // Validate environment variables
+    if (!file || !maxRetries || !retryDelay || !timeout) {
+        log.error("Missing required environment variables", {
+            FILE: file,
+            MAX_RETRIES: maxRetries,
+            RETRY_DELAY: retryDelay,
+            TIMEOUT: timeout,
+        });
+        process.exit(1);
+    }
 
     const browser = await puppeteer.launch({
         headless: true,
@@ -465,15 +531,30 @@ async function main() {
 
     try {
         const { games } = await load();
+        log.info(`Loaded ${games.length} games from ${file}`);
         const cache = await loadCache();
-        const updated = await update(games, cache, browser);
-        if (games.length !== updated.length) await save(updated);
-        for (let i = 0; i < updated.length; i++) {
-            const [game, update] = await details(updated[i], browser);
-            updated[i] = game;
-            if (update) await save(updated);
+
+        let tempGames = await loadTemp();
+        let finalGames;
+
+        if (tempGames.length === 0) {
+            log.info("‼️ No temp.json found or empty, running update...");
+            const { games: updatedGames, tempGames: updatedTempGames } =
+                await update(games, cache, browser);
+            log.info(`Update completed. 🔎 Found ${updatedTempGames.length}`);
+            finalGames = await processTempGames(updatedGames, browser);
+        } else {
+            log.info("🪄 temp.json found with games, processing directly...");
+            finalGames = await processTempGames(games, browser);
         }
-        await save(updated);
+
+        await save(finalGames);
+        for (let i = 0; i < finalGames.length; i++) {
+            const [game, update] = await details(finalGames[i], browser);
+            finalGames[i] = game;
+            if (update) await save(finalGames);
+        }
+        await save(finalGames);
         cache.lastChecked = new Date().toISOString();
         await saveCache(cache);
     } finally {
@@ -496,4 +577,8 @@ if (require.main === module) {
     exports.loadCache = loadCache;
     exports.saveCache = saveCache;
     exports.countItems = countItems;
+    exports.loadTemp = loadTemp;
+    exports.saveTemp = saveTemp;
+    exports.deleteTemp = deleteTemp;
+    exports.processTempGames = processTempGames;
 }
