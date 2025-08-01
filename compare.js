@@ -142,7 +142,7 @@ async function details(game, browser) {
         for (const line of contentText) {
             if (line.match(/genres|tags/i))
                 game.tags = line
-                    .replace(/.*genres|tags.*?:/i, "")
+                    .replace(/.*:/, "")
                     .trim()
                     .split(", ")
                     .filter(Boolean);
@@ -331,7 +331,6 @@ async function saveTemp(games) {
     try {
         const json = JSON.stringify(games, null, 2);
         fs.writeFileSync(tempFile, json);
-        log.data("saveTemp", { file: tempFile, games: games.length });
         log.data(`Checked games. Saved ${games.length}`);
     } catch (err) {
         log.error(`⚠️ Save ${tempFile} failed. Error: ${err.message}`);
