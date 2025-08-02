@@ -32,6 +32,7 @@ const argv = yargs
 // Configurable
 const baseUrl = process.env.BASE_URL;
 const fullUrl = `${baseUrl}all-my-repacks-a-z`;
+const file = process.env.FILE;
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
@@ -146,13 +147,13 @@ async function scrapeNewestGames(browser) {
                 new Date(articles[0].timestamp) <= lastChecked
             ) {
                 log.info(
-                    `🛑 Stopping pagination: First article on page is older than ${lastChecked.toISOString()}`
+                    `🛑 Stopping pagination: First game on page is older than ${lastChecked.toISOString()}`
                 );
                 break;
             }
 
             log.data(
-                `🔥 Found ${articles.length} articles on page ${currentPageUrl}`
+                `🔥 Found ${articles.length} games on page ${currentPageUrl}`
             );
 
             // Load existing games from games.json
@@ -173,7 +174,7 @@ async function scrapeNewestGames(browser) {
             log.data(
                 `🔎 Found ${
                     newArticles.length
-                } new articles since ${lastChecked.toISOString()} on page ${currentPageUrl}`
+                } new games since ${lastChecked.toISOString()} on page ${currentPageUrl}`
             );
 
             // Step 4 & 5: Process new articles not in games.json and fetch details
