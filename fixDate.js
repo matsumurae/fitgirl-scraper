@@ -51,7 +51,6 @@ async function checkTimestampsAgainstWebsite(
     attempt = 1,
     startIndex = null
 ) {
-    log.headerJson();
     const games = await loadFile();
     const progress = await loadProgress();
     let startFrom =
@@ -343,8 +342,8 @@ async function checkTimestampsAgainstWebsite(
 }
 
 async function main() {
-    log.configure({ inspect: { breakLength: 500 } });
-    log.headerJson();
+    // log.configure({ inspect: { breakLength: 500 } });
+    // log.headerJson();
 
     // Check timestamps and game data against website
     const timestampResults = await checkTimestampsAgainstWebsite(false); // Set to true to fix additional data if needed

@@ -11,8 +11,8 @@ const maxResults = 40;
 const file = process.env.FILE;
 
 async function main() {
-    log.configure({ inspect: { breakLength: 500 } });
-    log.headerJson();
+    // log.configure({ inspect: { breakLength: 500 } });
+    // log.headerJson();
 
     const games = (await loadFile(file)).map(
         ({ name, size, date, tags, link }) => ({

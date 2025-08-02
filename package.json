@@ -10,7 +10,8 @@
         "find": "node --no-warnings find.js",
         "ddl": "node --no-warnings ddl.js",
         "date": "node --no-warnings fixDate.js",
-        "fetch": "node --no-warnings fetchAll.js"
+        "fetch": "node --no-warnings fetchAll.js",
+        "pages": "node --no-warnings fetchAll.js --all"
     },
     "keywords": [],
     "author": "Matsumurae",

@@ -43,29 +43,32 @@ async function fetchHtml(uri, browser, attempt = 1) {
         await page.close();
         return html;
     } catch (err) {
-        if (page) {
-            await page.close();
-        }
-        if (err.message.includes("net::ERR_CONNECTION_REFUSED")) {
-            log.error("Connection refused by server", { uri, attempt });
-            if (attempt < maxRetries) {
-                log.info(
-                    `Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`
-                );
-                await new Promise((resolve) => setTimeout(resolve, retryDelay));
-                return fetchHtml(uri, browser, attempt + 1);
+        if (
+            err.message.includes("Navigation timeout") ||
+            err.message.includes("net::ERR_CONNECTION_REFUSED") ||
+            err.message.includes("net::ERR_CONNECTION_RESET")
+        ) {
+            log.warn(
+                `Navigation attempt failed for ${uri}. Error: ${err.message}`
+            );
+            if (attempt === maxRetries) {
+                log.error(`All retries failed for ${uri}`);
+                if (page) {
+                    await page.close();
+                }
+                return "";
             }
-            log.error("All retries failed for", { uri });
-            return "";
-        }
-        log.warn("fetch error", { uri, attempt, error: err.message });
-        if (attempt < maxRetries) {
-            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`);
+            log.info(`Retrying ${uri} (attempt ${attempt + 1}/${maxRetries})`, {
+                uri,
+            });
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
             return fetchHtml(uri, browser, attempt + 1);
+        } else {
+            if (page) {
+                await page.close();
+            }
+            throw err;
         }
-        log.error("fetch failed after retries", { uri, error: err.message });
-        return "";
     }
 }
 
@@ -119,7 +122,7 @@ async function saveFile(data, file = process.env.FILE, options = {}) {
                 fs.writeFileSync(file, JSON.stringify(games, null, 2));
                 log.info(`🔥 Saved ${data.name} to ${file}`);
             } else {
-                log.debug(`‼️ ${data.name} game already exists. Skipping…`);
+                log.debug(`‼️  ${data.name} game already exists. Skipping…`);
                 return;
             }
         } else {

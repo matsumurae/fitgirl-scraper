@@ -116,8 +116,8 @@ async function fetchDirectLinks(game, browser, attempt = 1) {
 
 // Main function to update direct links
 async function main() {
-    log.configure({ inspect: { breakLength: 500 } });
-    log.headerJson();
+    // log.configure({ inspect: { breakLength: 500 } });
+    // log.headerJson();
 
     const browser = await puppeteer.launch({
         headless: true,
