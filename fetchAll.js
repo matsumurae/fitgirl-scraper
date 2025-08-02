@@ -5,6 +5,8 @@ const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
 const yargs = require("yargs");
+const { Worker } = require("worker_threads");
+const AsyncLock = require("async-lock");
 const {
     configurePage,
     fetchHtml,
@@ -110,6 +112,26 @@ async function scrapeNewestGames(browser) {
     const page = await browser.newPage();
     let currentPageUrl = baseUrl;
     let hasNextPage = true;
+    const maxWorkers = 4;
+    const activeWorkers = new Set();
+
+    const processGame = (game) => {
+        return new Promise((resolve, reject) => {
+            const worker = new Worker("./worker.js");
+            activeWorkers.add(worker);
+            worker.postMessage(game);
+            worker.on("message", (msg) => {
+                activeWorkers.delete(worker);
+                worker.terminate();
+                resolve(msg);
+            });
+            worker.on("error", (err) => {
+                activeWorkers.delete(worker);
+                worker.terminate();
+                reject(err);
+            });
+        });
+    };
 
     try {
         await configurePage(page);
@@ -177,7 +199,7 @@ async function scrapeNewestGames(browser) {
                 } new games since ${lastChecked.toISOString()} on page ${currentPageUrl}`
             );
 
-            // Process new games
+            // Process new games with workers
             for (const { name, link, timestamp } of newArticles) {
                 if (!existingLinks.has(link)) {
                     const game = {
@@ -188,39 +210,68 @@ async function scrapeNewestGames(browser) {
                     };
                     log.info(`🔎 Found new game: ${game.name} (${game.link})`);
 
-                    // Fetch details using the shared details function
-                    const [updatedGame, verified] = await details(
-                        game,
-                        browser
-                    );
-                    if (
-                        verified ||
-                        updatedGame.size > 0 ||
-                        updatedGame.magnet ||
-                        Object.keys(updatedGame.direct).length > 0
-                    ) {
+                    // Wait for available worker
+                    if (activeWorkers.size >= maxWorkers) {
+                        await new Promise((resolve) => {
+                            const checkWorkers = setInterval(() => {
+                                if (activeWorkers.size < maxWorkers) {
+                                    clearInterval(checkWorkers);
+                                    resolve();
+                                }
+                            }, 100);
+                        });
+                    }
+
+                    try {
+                        const result = await processGame(game);
+                        if (result.error) {
+                            log.warn(
+                                `Skipping ${game.name} due to error: ${result.error}`
+                            );
+                            continue;
+                        }
+
                         const newGame = {
-                            id: updatedGame.id,
-                            name: updatedGame.name,
-                            link: updatedGame.link,
-                            date: updatedGame.date,
-                            tags: updatedGame.tags || [],
-                            creator: updatedGame.creator || [],
-                            original: updatedGame.original || "",
-                            packed: updatedGame.packed || "",
-                            size: updatedGame.size || 0,
-                            verified: updatedGame.verified,
-                            magnet: updatedGame.magnet || null,
-                            direct: updatedGame.direct || {},
+                            id: result.game.id,
+                            name: result.game.name,
+                            link: result.game.link,
+                            date: result.game.date || new Date().toISOString(),
+                            tags: result.game.tags || [],
+                            creator: result.game.creator || [],
+                            original: result.game.original || "",
+                            packed: result.game.packed || "",
+                            size: result.game.size || 0,
+                            verified: result.verified || false,
+                            magnet: result.game.magnet || null,
+                            direct: result.game.direct || {},
                             lastChecked:
-                                updatedGame.lastChecked ||
+                                result.game.lastChecked ||
                                 new Date().toISOString(),
                         };
-                        await saveFile(newGame, file, { isSingleGame: true });
-                        log.info(`✅ Saved new game: ${newGame.name}`);
-                    } else {
-                        log.warn(
-                            `⚠️ Skipping save for ${game.name}: incomplete data`
+
+                        const shouldSave =
+                            newGame.verified ||
+                            newGame.size > 0 ||
+                            newGame.magnet ||
+                            Object.keys(newGame.direct).length > 0;
+
+                        await lock.acquire("file-save", async () => {
+                            if (shouldSave) {
+                                await saveFile(newGame, file, {
+                                    isSingleGame: true,
+                                });
+                                log.info(
+                                    `✅ Saved new game: ${newGame.name} to ${file}`
+                                );
+                            } else {
+                                log.warn(
+                                    `⚠️ Skipping save for ${newGame.name}: incomplete data`
+                                );
+                            }
+                        });
+                    } catch (err) {
+                        log.error(
+                            `Worker error for ${game.name}: ${err.message}`
                         );
                     }
                 } else {
@@ -254,6 +305,11 @@ async function scrapeNewestGames(browser) {
     } catch (err) {
         log.error("Newest games scraping failed", { error: err.message });
         await page.close();
+    } finally {
+        // Wait for all workers to finish and terminate
+        while (activeWorkers.size > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
     }
 }
 
