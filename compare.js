@@ -115,8 +115,9 @@ async function deleteTemp() {
 
 async function checkGames(games) {
     const completeGames = await loadComplete();
-    const existingGames = await loadFile(file);
+    const existingGames = games || (await loadFile(file));
     let newGamesCount = 0;
+    let updatedGamesCount = 0;
     let tempGames = await loadTemp();
 
     const existingLinks = new Set(existingGames.map((game) => game.link));
@@ -126,7 +127,21 @@ async function checkGames(games) {
     log.data(`⚠️ ${uniqueToComplete} missing games.`);
 
     for (const completeGame of completeGames) {
-        if (!existingLinks.has(completeGame.link)) {
+        const existingGame = existingGames.find(
+            (game) => game.link === completeGame.link
+        );
+        if (existingGame) {
+            // Check if names differ
+            if (existingGame.name !== completeGame.name) {
+                log.info(
+                    `🔄 Updating ${completeGame.link}: "${existingGame.name}" to "${completeGame.name}"`
+                );
+                existingGame.name = completeGame.name;
+                existingGame.lastChecked = new Date().toISOString();
+                updatedGamesCount++;
+            }
+        } else {
+            // New game found
             let newGame = {
                 id: existingGames.length + 1,
                 name: completeGame.name,
@@ -136,11 +151,6 @@ async function checkGames(games) {
             log.info(`🔎 New game ${newGame.name} found from complete.json`);
             tempGames.push(newGame);
             newGamesCount++;
-        } else {
-            log.debug("Game already exists in games.json", {
-                name: completeGame.name,
-                link: completeGame.link,
-            });
         }
     }
 
@@ -149,8 +159,17 @@ async function checkGames(games) {
         log.info(`Saved ${newGamesCount} new games to ${tempFile}`);
     }
 
+    if (updatedGamesCount > 0) {
+        await lock.acquire("file-save", async () => {
+            await saveFile(existingGames, file, {
+                logMessage: `Updated ${updatedGamesCount} game names in ${file}`,
+            });
+            log.info(`Updated ${updatedGamesCount} game names in ${file}`);
+        });
+    }
+
     log.data(
-        `${existingGames.length} in games.json. ${newGamesCount} new games added to temp.json, total in temp.json: ${tempGames.length}. You're missing ${uniqueToComplete} games.`
+        `${existingGames.length} in games.json. ${newGamesCount} new games added to temp.json, total in temp.json: ${tempGames.length}. ${updatedGamesCount} names updated. You're missing ${uniqueToComplete} games.`
     );
 
     return { games: existingGames, tempGames };
@@ -166,7 +185,7 @@ async function processTempGames(games, browser) {
 
     log.info(`Processing ${tempGames.length} games from temp.json`);
 
-    const maxWorkers = 4; // Adjust based on system resources
+    const maxWorkers = 4;
     const activeWorkers = new Set();
 
     const processGame = (game) => {
@@ -235,7 +254,6 @@ async function processTempGames(games, browser) {
                     await saveFile(newGame, file, { isSingleGame: true });
                     games.push(newGame);
                     log.info(`${newGame.name} processed and saved to ${file}`);
-                    // Only remove from tempGames if saved successfully
                     tempGames = tempGames.filter(
                         (g) => g.link !== newGame.link
                     );
@@ -253,16 +271,13 @@ async function processTempGames(games, browser) {
                                 ? "present"
                                 : "absent",
                     });
-                    // Do not remove from tempGames, keep it for retry
                 }
             });
         } catch (err) {
             log.error(`Worker error for ${game.name}: ${err.message}`);
-            // Keep game in tempGames for retry
         }
     }
 
-    // Wait for all workers to complete
     while (activeWorkers.size > 0) {
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -271,7 +286,6 @@ async function processTempGames(games, browser) {
         await deleteTemp();
     }
 
-    // Final save to ensure all games are written to process.env.FILE
     await lock.acquire("file-save", async () => {
         await saveFile(games, file, {
             logMessage: `Final save to ${file} with ${games.length} games`,
@@ -330,6 +344,16 @@ async function main() {
         process.exit(1);
     }
 
+    const args = process.argv.slice(2);
+    if (args.includes("--count-items")) {
+        await countItems();
+        process.exit(0);
+    } else if (args.includes("--check")) {
+        const games = await loadFile(file);
+        await checkGames(games);
+        process.exit(0);
+    }
+
     const browser = await puppeteer.launch({
         headless: true,
         args: [
@@ -358,7 +382,6 @@ async function main() {
             finalGames = await processTempGames(games, browser);
         }
 
-        // Ensure final save to process.env.FILE
         await lock.acquire("file-save", async () => {
             await saveFile(finalGames, file, {
                 logMessage: `Final save to ${file} with ${finalGames.length} games`,
@@ -379,7 +402,6 @@ async function main() {
             }
         }
 
-        // Final save after all updates
         await lock.acquire("file-save", async () => {
             await saveFile(finalGames, file, {
                 logMessage: `Final save after updates to ${file}`,
@@ -398,12 +420,7 @@ async function main() {
 }
 
 if (require.main === module) {
-    const args = process.argv.slice(2);
-    if (args.includes("--count-items")) {
-        countItems().then(() => process.exit());
-    } else {
-        main();
-    }
+    main();
 } else {
     exports.loadCache = loadCache;
     exports.saveCache = saveCache;
@@ -412,4 +429,5 @@ if (require.main === module) {
     exports.saveTemp = saveTemp;
     exports.deleteTemp = deleteTemp;
     exports.processTempGames = processTempGames;
+    exports.checkGames = checkGames;
 }
