@@ -177,7 +177,7 @@ async function scrapeNewestGames(browser) {
                 } new games since ${lastChecked.toISOString()} on page ${currentPageUrl}`
             );
 
-            // Step 4 & 5: Process new articles not in games.json and fetch details
+            // Process new games
             for (const { name, link, timestamp } of newArticles) {
                 if (!existingLinks.has(link)) {
                     const game = {

@@ -8,6 +8,8 @@ const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const log = require("@vladmandic/pilogger");
 const { saveFile, loadFile, details } = require("./utils");
+const { Worker } = require("worker_threads");
+const AsyncLock = require("async-lock");
 
 puppeteer.use(StealthPlugin());
 
@@ -17,6 +19,7 @@ const tempFile = "temp.json";
 const maxRetries = parseInt(process.env.MAX_RETRIES);
 const retryDelay = parseInt(process.env.RETRY_DELAY);
 const timeout = parseInt(process.env.TIMEOUT);
+const lock = new AsyncLock();
 
 async function loadCache() {
     try {
@@ -49,7 +52,7 @@ async function saveCache(cache) {
         fs.writeFileSync(cacheFile, json);
         log.data(`✅ Saved cache on ${cacheFile}!`);
     } catch (err) {
-        log.error(`⚠️ Failed to load ${cacheFile}. Error: ${err.message}`);
+        log.error(`⚠️ Failed to save ${cacheFile}. Error: ${err.message}`);
     }
 }
 
@@ -116,10 +119,7 @@ async function checkGames(games) {
     let newGamesCount = 0;
     let tempGames = await loadTemp();
 
-    // Create a Set of normalized links from games.json
     const existingLinks = new Set(existingGames.map((game) => game.link));
-
-    // Log the number of games that are in complete.json but not in games.json
     const uniqueToComplete = completeGames.filter(
         (game) => !existingLinks.has(game.link)
     ).length;
@@ -165,63 +165,119 @@ async function processTempGames(games, browser) {
     }
 
     log.info(`Processing ${tempGames.length} games from temp.json`);
-    for (let i = 0; i < tempGames.length; i++) {
-        log.info(`🔎 scraping details for ${tempGames[i].name}`);
-        const [updatedGame, verified] = await details(tempGames[i], browser);
-        const newGame = {
-            id: updatedGame.id,
-            name: updatedGame.name,
-            link: updatedGame.link,
-            date: updatedGame.date,
-            tags: updatedGame.tags || [],
-            creator: updatedGame.creator || [],
-            original: updatedGame.original || "",
-            packed: updatedGame.packed || "",
-            size: updatedGame.size || 0,
-            verified: updatedGame.verified,
-            magnet: updatedGame.magnet || null,
-            direct: updatedGame.direct || {},
-            lastChecked: updatedGame.lastChecked || new Date().toISOString(),
-        };
 
-        if (
-            newGame.verified ||
-            newGame.size > 0 ||
-            newGame.magnet ||
-            Object.keys(newGame.direct).length > 0
-        ) {
-            games.push(newGame);
-            await saveFile(newGame, file, { isSingleGame: true });
-            log.info(`${newGame.name} game saved.`, {
-                link: newGame.link,
-                size: newGame.size,
-                date: newGame.date.toISOString(),
-                tags: newGame.tags,
-                creator: newGame.creator,
-                magnet: newGame.magnet ? "present" : "absent",
-                direct:
-                    Object.keys(newGame.direct).length > 0
-                        ? "present"
-                        : "absent",
-                verified: newGame.verified,
+    const maxWorkers = 4; // Adjust based on system resources
+    const activeWorkers = new Set();
+
+    const processGame = (game) => {
+        return new Promise((resolve, reject) => {
+            const worker = new Worker("./worker.js");
+            activeWorkers.add(worker);
+            worker.postMessage(game);
+            worker.on("message", (msg) => {
+                activeWorkers.delete(worker);
+                worker.terminate();
+                resolve(msg);
             });
-        } else {
-            log.warn("skipping save: incomplete game data", {
-                name: newGame.name,
-                link: newGame.link,
-                verified: newGame.verified,
-                size: newGame.size,
+            worker.on("error", (err) => {
+                activeWorkers.delete(worker);
+                worker.terminate();
+                reject(err);
+            });
+        });
+    };
+
+    for (const game of tempGames) {
+        if (activeWorkers.size >= maxWorkers) {
+            await new Promise((resolve) => {
+                const checkWorkers = setInterval(() => {
+                    if (activeWorkers.size < maxWorkers) {
+                        clearInterval(checkWorkers);
+                        resolve();
+                    }
+                }, 100);
             });
         }
 
-        tempGames.splice(i, 1);
-        i--;
-        await saveTemp(tempGames);
+        log.info(`🔎 Scraping details for ${game.name}`);
+        try {
+            const result = await processGame(game);
+            if (result.error) {
+                log.warn(`Skipping ${game.name} due to error: ${result.error}`);
+                continue;
+            }
+
+            const newGame = {
+                id: result.game.id,
+                name: result.game.name,
+                link: result.game.link,
+                date: result.game.date || new Date().toISOString(),
+                tags: result.game.tags || [],
+                creator: result.game.creator || [],
+                original: result.game.original || "",
+                packed: result.game.packed || "",
+                size: result.game.size || 0,
+                verified: result.verified || false,
+                magnet: result.game.magnet || null,
+                direct: result.game.direct || {},
+                lastChecked:
+                    result.game.lastChecked || new Date().toISOString(),
+            };
+
+            const shouldSave =
+                newGame.verified ||
+                newGame.size > 0 ||
+                newGame.magnet ||
+                Object.keys(newGame.direct).length > 0;
+
+            await lock.acquire("file-save", async () => {
+                if (shouldSave) {
+                    await saveFile(newGame, file, { isSingleGame: true });
+                    games.push(newGame);
+                    log.info(`${newGame.name} processed and saved to ${file}`);
+                    // Only remove from tempGames if saved successfully
+                    tempGames = tempGames.filter(
+                        (g) => g.link !== newGame.link
+                    );
+                    await saveTemp(tempGames);
+                    log.info(`Removed ${newGame.name} from temp.json`);
+                } else {
+                    log.warn("Skipping save: incomplete game data", {
+                        name: newGame.name,
+                        link: newGame.link,
+                        verified: newGame.verified,
+                        size: newGame.size,
+                        magnet: newGame.magnet ? "present" : "absent",
+                        direct:
+                            Object.keys(newGame.direct).length > 0
+                                ? "present"
+                                : "absent",
+                    });
+                    // Do not remove from tempGames, keep it for retry
+                }
+            });
+        } catch (err) {
+            log.error(`Worker error for ${game.name}: ${err.message}`);
+            // Keep game in tempGames for retry
+        }
+    }
+
+    // Wait for all workers to complete
+    while (activeWorkers.size > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
     if (tempGames.length === 0) {
         await deleteTemp();
     }
+
+    // Final save to ensure all games are written to process.env.FILE
+    await lock.acquire("file-save", async () => {
+        await saveFile(games, file, {
+            logMessage: `Final save to ${file} with ${games.length} games`,
+        });
+        log.info(`Final save completed to ${file} with ${games.length} games`);
+    });
 
     return games;
 }
@@ -246,7 +302,7 @@ async function countItems() {
         );
         log.data(`✨ ${completeCount} on complete.json`);
         log.data(`📝 ${tempCount} on temp.json`);
-        log.data(`⚠️  ${uniqueToComplete} missing games.`);
+        log.data(`⚠️ ${uniqueToComplete} missing games.`);
 
         return { gamesCount, completeCount, tempCount, uniqueToComplete };
     } catch (err) {
@@ -264,7 +320,6 @@ async function main() {
     log.configure({ inspect: { breakLength: 500 } });
     log.headerJson();
 
-    // Validate environment variables
     if (!file || !maxRetries || !retryDelay || !timeout) {
         log.error("Missing required environment variables", {
             FILE: file,
@@ -299,19 +354,44 @@ async function main() {
             log.info(`Update completed. 🔎 Found ${updatedTempGames.length}`);
             finalGames = await processTempGames(updatedGames, browser);
         } else {
-            log.info(`🪄  temp.json found with games, processing directly...`);
+            log.info(`🪄 temp.json found with games, processing directly...`);
             finalGames = await processTempGames(games, browser);
         }
 
-        await saveFile(finalGames);
+        // Ensure final save to process.env.FILE
+        await lock.acquire("file-save", async () => {
+            await saveFile(finalGames, file, {
+                logMessage: `Final save to ${file} with ${finalGames.length} games`,
+            });
+            log.info(`Final save to ${file} with ${finalGames.length} games`);
+        });
+
         for (let i = 0; i < finalGames.length; i++) {
             const [game, update] = await details(finalGames[i], browser);
             finalGames[i] = game;
-            if (update) await saveFile(finalGames);
+            if (update) {
+                await lock.acquire("file-save", async () => {
+                    await saveFile(finalGames, file, {
+                        logMessage: `Updated ${game.name} in ${file}`,
+                    });
+                    log.info(`Updated ${game.name} in ${file}`);
+                });
+            }
         }
-        await saveFile(finalGames);
+
+        // Final save after all updates
+        await lock.acquire("file-save", async () => {
+            await saveFile(finalGames, file, {
+                logMessage: `Final save after updates to ${file}`,
+            });
+            log.info(`Final save after updates to ${file}`);
+        });
+
         cache.lastChecked = new Date().toISOString();
         await saveCache(cache);
+    } catch (err) {
+        log.error(`Main failed: ${err.message}`);
+        process.exit(1);
     } finally {
         await browser.close();
     }

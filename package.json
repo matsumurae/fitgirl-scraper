@@ -5,6 +5,7 @@
     "main": "compare.js",
     "scripts": {
         "compare": "node --no-warnings compare.js",
+        "check": "node --no-warnings compare.js --check",
         "count": "node --no-warnings compare.js --count-items",
         "find": "node --no-warnings find.js",
         "ddl": "node --no-warnings ddl.js",
@@ -16,6 +17,7 @@
     "license": "MIT",
     "dependencies": {
         "@vladmandic/pilogger": "^0.5.1",
+        "async-lock": "^1.4.1",
         "dotenv": "^17.2.1",
         "puppeteer": "^24.15.0",
         "puppeteer-extra": "^3.3.6",

@@ -1,23 +1,40 @@
 const log = require("@vladmandic/pilogger");
 const fs = require("fs");
 
+const maxRetries = parseInt(process.env.MAX_RETRIES);
+const retryDelay = parseInt(process.env.RETRY_DELAY);
+const timeout = parseInt(process.env.TIMEOUT);
+
 // Configure page with common settings
 async function configurePage(page) {
     await page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
     );
     await page.setExtraHTTPHeaders({
         "Accept-Language": "en-US,en;q=0.9",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-User": "?1",
+        "Sec-Fetch-Dest": "document",
+    });
+    // Optional: Emulate a real browser viewport
+    await page.setViewport({ width: 1366, height: 768 });
+    // Optional: Disable WebGL and other features that might trigger detection
+    await page.evaluateOnNewDocument(() => {
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function (parameter) {
+            if (parameter === 37445) return "Intel";
+            if (parameter === 37446) return "Intel Iris OpenGL Engine";
+            return getParameter(parameter);
+        };
     });
 }
 
 // Fetch HTML content of a URI using Puppeteer with retries
 async function fetchHtml(uri, browser, attempt = 1) {
     let page = null;
-    const maxRetries = parseInt(process.env.MAX_RETRIES);
-    const retryDelay = parseInt(process.env.RETRY_DELAY);
-    const timeout = parseInt(process.env.TIMEOUT);
     try {
         page = await browser.newPage();
         await configurePage(page);
@@ -75,19 +92,7 @@ async function loadFile(file = process.env.FILE, logMessage = null) {
             }
         }
 
-        log.data(
-            `🌀 Loading JSON… There's ${filtered.length} games ${notChecked} not checked today`
-        );
-
-        log.data(
-            `DDL links: ${
-                filtered.filter(
-                    (g) => g.direct && Object.keys(g.direct).length > 0
-                ).length
-            }. Missing DDL: ${
-                filtered.filter((g) => g.verified && !g.direct).length
-            }`
-        );
+        log.data(`🌀 Loading JSON, wait a sec…`);
         return filtered;
     } catch (err) {
         log.error(`⚠️  Failed to load ${file}. Error: ${err.message}`);
@@ -151,22 +156,48 @@ async function saveFile(data, file = process.env.FILE, options = {}) {
 // Fetch detailed game information from a game's page
 async function details(game, browser) {
     let page = null;
-    try {
-        const content = await fetchHtml(game.link, browser);
-        if (!content) {
-            log.warn("details: no content fetched", {
-                id: game.id,
-                game: game.name,
-            });
-            return [game, false];
-        }
 
+    try {
         page = await browser.newPage();
         await configurePage(page);
-        await page.goto(game.link, {
-            waitUntil: "networkidle2",
-            timeout: parseInt(process.env.TIMEOUT),
-        });
+
+        // Retry navigation on timeout or specific errors
+        let attempt = 1;
+        while (attempt <= maxRetries) {
+            try {
+                await page.goto(game.link, {
+                    waitUntil: "domcontentloaded",
+                    timeout,
+                });
+                break;
+            } catch (err) {
+                if (
+                    err.message.includes("Navigation timeout") ||
+                    err.message.includes("net::ERR_CONNECTION_REFUSED") ||
+                    err.message.includes("net::ERR_CONNECTION_RESET")
+                ) {
+                    log.warn(
+                        `Navigation attempt failed for ${game.name}. Error: ${err.message}`
+                    );
+                    if (attempt === maxRetries) {
+                        log.error(`All retries failed for ${game.name}`);
+                        await page.close();
+                        return [game, false];
+                    }
+                    log.info(
+                        `Retrying ${game.name} (attempt ${
+                            attempt + 1
+                        }/${maxRetries})`
+                    );
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, retryDelay)
+                    );
+                    attempt++;
+                } else {
+                    throw err;
+                }
+            }
+        }
 
         const date = await page.evaluate(() => {
             const dateEl = document.querySelector("time.entry-date");
