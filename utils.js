@@ -109,28 +109,36 @@ async function saveFile(data, file = process.env.FILE, options = {}) {
         const { logMessage, isSingleGame = false } = options;
         let games = [];
 
-        // If saving a single game, load existing games and check for duplicates
         if (isSingleGame) {
             if (fs.existsSync(file)) {
                 const existingData = fs.readFileSync(file, "utf8");
                 games = JSON.parse(existingData);
             }
 
-            // Check for duplicates using the 'link' property
             if (!games.find((g) => g.link === data.link)) {
                 games.push(data);
                 fs.writeFileSync(file, JSON.stringify(games, null, 2));
                 log.info(`🔥 Saved ${data.name} to ${file}`);
             } else {
-                log.debug(`‼️  ${data.name} game already exists. Skipping…`);
+                log.debug(`‼️ ${data.name} game already exists. Skipping…`);
                 return;
             }
         } else {
-            // Save entire array of games
-            games = data;
+            // Deduplicate by link
+            const seenLinks = new Set();
+            games = data.filter((game) => {
+                if (!seenLinks.has(game.link)) {
+                    seenLinks.add(game.link);
+                    return true;
+                }
+                log.debug(
+                    `‼️ Duplicate game ${game.name} with link ${game.link} skipped`
+                );
+                return false;
+            });
+
             fs.writeFileSync(file, JSON.stringify(games, null, 2));
 
-            // Generate default log message for array of games
             const today = new Date().toISOString().split("T")[0];
             const notChecked = games.filter(
                 (g) => !g.lastChecked || g.lastChecked.split("T")[0] !== today

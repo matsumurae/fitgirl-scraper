@@ -91,6 +91,10 @@ async function loadTemp() {
 
 async function saveTemp(games) {
     try {
+        if (!games || games.length === 0) {
+            await deleteTemp();
+            return;
+        }
         const json = JSON.stringify(games, null, 2);
         fs.writeFileSync(tempFile, json);
         log.data(`Checked games. Remaining ${games.length} games`);
@@ -226,6 +230,80 @@ async function processTempGames(games, browser) {
     return games;
 }
 
+async function checkRedirectsAndClean(browser) {
+    try {
+        const games = await loadFile(file);
+        const completeGames = await loadComplete();
+        const completeLinks = new Set(completeGames.map((game) => game.link));
+        const gamesLinks = new Set(games.map((game) => game.link));
+
+        // Find games in games.json not in complete.json
+        const uniqueToGames = games.filter(
+            (game) => !completeLinks.has(game.link)
+        );
+
+        if (uniqueToGames.length === 0) {
+            log.info("No games in games.json that are not in complete.json");
+            return games;
+        }
+
+        log.info(`Checking ${uniqueToGames.length} games for redirects`);
+
+        const page = await browser.newPage();
+        await page.setRequestInterception(true);
+        page.on("request", (request) => {
+            request.continue();
+        });
+
+        let updatedGames = [...games];
+        for (const game of uniqueToGames) {
+            try {
+                log.info(`Checking URL for ${game.name}: ${game.link}`);
+                const response = await page.goto(game.link, {
+                    waitUntil: "domcontentloaded",
+                    timeout: timeout,
+                });
+
+                const finalUrl = response.url();
+                if (finalUrl !== game.link) {
+                    log.info(
+                        `Redirect detected for ${game.name}: ${game.link} -> ${finalUrl}`
+                    );
+                    if (gamesLinks.has(finalUrl)) {
+                        log.info(
+                            `Removing ${game.name} as ${finalUrl} already exists in games.json`
+                        );
+                        updatedGames = updatedGames.filter(
+                            (g) => g.link !== game.link
+                        );
+                    }
+                }
+            } catch (err) {
+                log.error(
+                    `Failed to check URL for ${game.name}: ${err.message}`
+                );
+            }
+        }
+
+        await page.close();
+        if (updatedGames.length !== games.length) {
+            await saveFile(updatedGames, file);
+            log.info(
+                `Updated games.json, removed ${
+                    games.length - updatedGames.length
+                } redirected games`
+            );
+        } else {
+            log.info("No games removed after redirect checks");
+        }
+
+        return updatedGames;
+    } catch (err) {
+        log.error(`⚠️ checkRedirectsAndClean failed. Error: ${err.message}`);
+        return await loadFile(file);
+    }
+}
+
 async function countItems() {
     try {
         const games = await loadFile(file);
@@ -235,20 +313,61 @@ async function countItems() {
         const tempGames = await loadTemp();
         const tempCount = tempGames.length;
         const gamesLinks = new Set(games.map((game) => game.link));
+        const completeLinks = new Set(completeGames.map((game) => game.link));
+
+        // Check for duplicates in games.json
+        const seenLinks = new Set();
+        const duplicates = games.filter((game) => {
+            if (seenLinks.has(game.link)) return true;
+            seenLinks.add(game.link);
+            return false;
+        });
+        if (duplicates.length > 0) {
+            log.warn(
+                `Found ${duplicates.length} duplicates in games.json`,
+                duplicates
+            );
+        }
+
+        // Find games in games.json not in complete.json
+        const uniqueToGames = games.filter(
+            (game) => !completeLinks.has(game.link)
+        );
+        if (uniqueToGames.length > 0) {
+            log.info(
+                `Found ${uniqueToGames.length} games in games.json not in complete.json`,
+                uniqueToGames
+            );
+        } else {
+            log.info(
+                `No games found in games.json that are not in complete.json`
+            );
+        }
+
+        // Find games in complete.json not in games.json
         const uniqueToComplete = completeGames.filter(
             (game) => !gamesLinks.has(game.link)
-        ).length;
+        );
 
         log.data(
-            `🔥 ${gamesCount} on games.json and ${
+            `🔥 ${gamesCount} on games.json (${seenLinks.size} unique) and ${
                 games.filter((g) => g.verified).length
             } verified.`
         );
         log.data(`✨ ${completeCount} on complete.json`);
         log.data(`📝 ${tempCount} on temp.json`);
-        log.data(`⚠️  ${uniqueToComplete} missing games.`);
+        log.data(
+            `⚠️ ${uniqueToComplete.length} missing games:`,
+            uniqueToComplete
+        );
 
-        return { gamesCount, completeCount, tempCount, uniqueToComplete };
+        return {
+            gamesCount,
+            completeCount,
+            tempCount,
+            uniqueToComplete: uniqueToComplete.length,
+            uniqueToGames: uniqueToGames.length,
+        };
     } catch (err) {
         log.error(`⚠️ Count items failed. Error: ${err.message}`);
         return {
@@ -256,14 +375,12 @@ async function countItems() {
             completeCount: 0,
             tempCount: 0,
             uniqueToComplete: 0,
+            uniqueToGames: 0,
         };
     }
 }
 
 async function main() {
-    // log.configure({ inspect: { breakLength: 500 } });
-    // log.headerJson();
-
     // Validate environment variables
     if (!file || !maxRetries || !retryDelay || !timeout) {
         log.error("Missing required environment variables", {
@@ -288,9 +405,15 @@ async function main() {
     });
 
     try {
-        const games = await loadFile(file);
+        let games = await loadFile(file);
         log.info(`Loaded ${games.length} games from ${file}`);
         const cache = await loadCache();
+
+        // Check for redirects and clean games.json
+        games = await checkRedirectsAndClean(browser);
+        log.info(
+            `After redirect check, ${games.length} games remain in games.json`
+        );
 
         let tempGames = await loadTemp();
         let finalGames;
@@ -306,13 +429,6 @@ async function main() {
             finalGames = await processTempGames(games, browser);
         }
 
-        await saveFile(finalGames);
-        for (let i = 0; i < finalGames.length; i++) {
-            const [game, update] = await details(finalGames[i], browser);
-            finalGames[i] = game;
-            if (update) await saveFile(finalGames);
-        }
-        await saveFile(finalGames);
         cache.lastChecked = new Date().toISOString();
         await saveCache(cache);
     } finally {
@@ -335,4 +451,5 @@ if (require.main === module) {
     exports.saveTemp = saveTemp;
     exports.deleteTemp = deleteTemp;
     exports.processTempGames = processTempGames;
+    exports.checkRedirectsAndClean = checkRedirectsAndClean;
 }
